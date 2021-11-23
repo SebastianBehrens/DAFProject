@@ -8,39 +8,12 @@ editor_options:
 library(tidyverse)
 library(fpp3)
 library(magrittr)
-data <- read_delim("iksr_dat.csv", delim = ";", locale = locale(encoding = "ISO-8859-1"))
+data <- read_delim("BaselMessungen.csv", delim = ";")
 ```
 
-# Cleaning
-Removing unnecessary columns
+# First Analysis
 ```{r}
-data %>% map(unique)
-data <- data %>% select(-c(Probenahmestelle, Fluss, Matrix, Gruppe, Probenahmeart, Sonderzeichen))
-data %<>% pivot_wider(names_from = "Kenngroessen", values_from = "Wert")
+data %<>% arrange(desc(Zeitstempel)) %>% mutate(diff = lag(Zeitstempel) - Zeitstempel)
+data %>% group_by(diff) %>% summarise(counter = n())
 ```
-datefying the column
-```{r}
-data %<>% mutate(Datum = dmy(Datum), 
-                Tag = day(Datum),
-                Monat = month(Datum),
-                Jahr = year(Datum)
-                )
-data %<>% 
-  mutate(diff_to_next_measurement = Datum - lag(Datum),
-         indicator_14days = (diff_to_next_measurement%in% c(10:20)))
-
-data[["running_count"]] <- rep(NA, dim(data)[1])
-aux <- 0
-for(i in c(2:dim(data)[1])){
-  if(data[[i, "indicator_14days"]] == data[[i-1, "indicator_14days"]]){
-    aux <- aux + 1
-  }else{
-    aux <- 0
-  }
-    data[[i, "running_count"]] <- aux
-}
-
-data %>% pull(running_count) %>% max(na.rm = T)
-```
-
 
