@@ -25,12 +25,20 @@ data %<>% mutate(Datum = dmy(Datum),
                 Monat = month(Datum),
                 Jahr = year(Datum)
                 )
-data %>% 
+data %<>% 
   mutate(diff_to_next_measurement = Datum - lag(Datum),
          indicator_14days = (diff_to_next_measurement==14))
-
-which(data %>% pull(indicator_14days))
-
+data %<>% drop_na()
+# data[["running_count"]] <- rep(NA, dim(data)[1])
+# aux <- 0
+# for(i in c(2:dim(data)[1])){
+#   if(data[[i, "indicator_14days"]] == data[[i-1, "indicator_14days"]]){
+#     aux <- aux + 1
+#   }else{
+#     aux <- 0
+#   }
+#     data[[i, "running_count"]] <- aux
+# }
 
 ```
 
