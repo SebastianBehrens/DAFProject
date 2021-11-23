@@ -1,0 +1,25 @@
+---
+author: "Behrens, Sebastian; Valentinelli, Denis; Velez-Klumpp, Sofia"
+title: "Problem Set 1"
+output:
+  pdf_document: 
+    extra_dependencies: subfig
+    fig_caption: yes
+    fig_crop: no
+    toc: yes
+    toc_depth: 2
+documentclass: article
+classoption:
+  - onecolumn
+papersize: a4
+fig_width: 4
+linestretch: 1.5
+fontsize: 12pt
+urlcolor: blue
+editor_options: 
+  chunk_output_type: console
+header-includes:
+ \usepackage{float}
+ \floatplacement{figure}{H}
+ \usepackage{amsmath}
+---
