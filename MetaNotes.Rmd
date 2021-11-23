@@ -1,0 +1,31 @@
+This file is for various thoughts towards our final paper/project.
+## Fragen
+- Sollen wir mehrere Zeitreihen kombinieren um eine Zeitreihe ("Target") zu modellieren oder sollen wir es bei einer einzigen Zeitreihe belassen?
+## Ideas
+- Sus Website [Link](http://iksr.bafg.de/iksr/dl_auswahl.asp?S=0&JA=2019)
+    - Flussraten 
+- Eurostat
+    - Fischerei
+    - Handel
+    - Übernachtungen
+    - Fahrgastaufkommen
+    - Umweltsteuern
+    - Elektrizität vom inländischen Markt
+
+Mögliche Struktur
+1. Einleitung
+2. ARMA
+3. ARIMA
+4. ARCH
+5. GARCH
+
+Bei jeder Modelvariante:
+- Gütigkeit des Modelfits untersuchen?
+    - Heteroskedastie
+    - Was sind die korrekten Parameter des Modells (q, d, phi)
+    - Correlogramm
+- Wie weiter?
+    - bei WN angekommen => done.
+    - noch nicht WN => welches nächste Modell testen => Warum 
+    (Das Warum in die Überleitung oder so)
+    - 

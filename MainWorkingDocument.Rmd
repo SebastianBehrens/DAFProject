@@ -1,0 +1,12 @@
+---
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+# Loading Data
+```{r}
+library(tidyverse)
+library(fpp3)
+data <- read_csv("iksr_dat.csv", delim = ";", )
+```
+
