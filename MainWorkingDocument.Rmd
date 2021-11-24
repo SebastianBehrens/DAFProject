@@ -13,7 +13,10 @@ data <- read_delim("BaselMessungen.csv", delim = ";")
 
 # First Analysis
 ```{r}
-data %<>% arrange(desc(Zeitstempel)) %>% mutate(diff = lag(Zeitstempel) - Zeitstempel)
-data %>% group_by(diff) %>% summarise(counter = n())
+data %>% arrange(desc(Zeitstempel)) %>% mutate(diff = lag(Zeitstempel) - Zeitstempel)%>% group_by(diff) %>% summarise(counter = n())
+plot(data$Zeitstempel, data$Abflussmenge)
+plot(data$Zeitstempel, data$Pegel)
+plot(data$Zeitstempel, data$Wasserstand)
+
 ```
 
