@@ -5,18 +5,95 @@ editor_options:
 ---
 # Loading Data
 ```{r}
+#install.packages("imputeTS")
 library(tidyverse)
 library(fpp3)
 library(magrittr)
+library(imputeTS)
+rm(list = ls())
 data <- read_delim("BaselMessungen.csv", delim = ";")
+data %<>% as_tsibble() %<>% 
+  select(-c("Wasserstand","Pegel"))
 ```
 
 # First Analysis
 ```{r}
-data %>% arrange(desc(Zeitstempel)) %>% mutate(diff = lag(Zeitstempel) - Zeitstempel)%>% group_by(diff) %>% summarise(counter = n())
-plot(data$Zeitstempel, data$Abflussmenge)
-plot(data$Zeitstempel, data$Pegel)
-plot(data$Zeitstempel, data$Wasserstand)
+length(data$Zeitstempel)
+length(data$Abflussmenge)
+class(difference(data$Zeitstempel,1))
+class(data$Zeitstempel)
+class(data$Abflussmenge)
 
+#data overview
+plot(data$Zeitstempel,data$Abflussmenge, type="l")
+ggplot(data=data)+
+  geom_line(aes(x=Zeitstempel,y=Abflussmenge))
+interval_pull(data$Zeitstempel)
+summary(data)
+
+#missing values----
+
+#see missing values
+sum(is.na(data$Abflussmenge))
+sum(is.na(data$Abflussmenge))/length(data$Zeitstempel)
+
+which(as.difftime(5, units = "mins") != difference(data$Zeitstempel,1))
+na_index <- which(is.na(data$Abflussmenge)== TRUE)
+View(data[na_index,])
+
+#identify / fill gaps
+has_gaps(data)
+count_gaps(data)
+scan_gaps(data)
+
+#total missing values visualized
+data %>% drop_na() %>% count_gaps() %>% mutate(val="Abflussmenge") %>%
+  ggplot(aes(x = val, colour = val)) +
+  geom_linerange(aes(ymin = .from, ymax = .to)) +
+  geom_point(aes(y = .from)) +
+  geom_point(aes(y = .to)) +
+  coord_flip() +
+  theme(legend.position = "bottom")
+
+data %>% drop_na() %>% count_gaps() %>% count(.n)
+data %>% drop_na() %>% count_gaps() %>% select(".n") %>% 
+  sum()
+
+```
+#Filling Gaps
+```{r}
+
+data %<>% fill_gaps( .full = TRUE)
+ggplot_na_distribution(data)
+ggplot_na_intervals(data)
+ggplot_na_gapsize(data)
+data_kalman <- na_kalman(data)
+has_gaps(data_kalman)
+ggplot_na_imputations(data, data_kalman)
+
+```
+#decomposition of time series with stl
+```{r}
+#aus fpp3
+decomp<- data_kalman %>%
+  model(stl = STL(Abflussmenge)) %>%
+  components() 
+
+decomp %>%
+  as_tsibble() %>%
+  autoplot(Abflussmenge, colour="gray") +
+  geom_line(mapping= aes(y=trend), colour = "#D55E00") +
+  labs(
+    y = "flow rate",
+    x = "time",
+    title = "Flow rate of the Rhine in Basel")
+
+autoplot(decomp)
+
+#is heteroscedastic
+remainder <- decomp$remainder
+
+
+acf(remainder)
 ```
 
