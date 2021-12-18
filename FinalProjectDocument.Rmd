@@ -23,3 +23,11 @@ header-includes:
  \floatplacement{figure}{H}
  \usepackage{amsmath}
 ---
+
+Steps to complete:
+- transform m^3/s by filtering flood dangers and subtracting alt-rhein abgabe (Q>1400) [flatten peaks] 
+- transform to velocity (km/h)
+- model the ts
+- make operationalizable
+  - enter distance, arrival date at latest => find optimal time window
+- make app  

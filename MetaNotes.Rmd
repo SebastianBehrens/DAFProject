@@ -14,7 +14,7 @@ This file is for various thoughts towards our final paper/project.
 
 Mögliche Struktur
 1. Einleitung
-2. ARMA
+2. ARMAw
 3. ARIMA
 4. ARCH
 5. GARCH
