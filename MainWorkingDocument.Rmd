@@ -1,84 +1,100 @@
 ---
 output: html_document
-editor_options: 
+editor_options:
   chunk_output_type: console
 ---
 # Loading Data
 ```{r}
+#install.packages("imputeTS")
 library(tidyverse)
 library(fpp3)
 library(magrittr)
+library(imputeTS)
+rm(list = ls())
 data <- read_delim("BaselMessungen.csv", delim = ";")
+data %<>% as_tsibble() %<>%
+  select(-c("Wasserstand","Pegel"))
 ```
 
 # First Analysis
 ```{r}
-data %>% arrange(desc(Zeitstempel)) %>% mutate(diff = lag(Zeitstempel) - Zeitstempel)%>% group_by(diff) %>% summarise(counter = n())
-plot(data$Zeitstempel, data$Abflussmenge)
-plot(data$Zeitstempel, data$Pegel)
-plot(data$Zeitstempel, data$Wasserstand)
+length(data$Zeitstempel)
+length(data$Abflussmenge)
+class(difference(data$Zeitstempel,1))
+class(data$Zeitstempel)
+class(data$Abflussmenge)
+
+#data overview
+plot(data$Zeitstempel,data$Abflussmenge, type="l")
+ggplot(data=data)+
+  geom_line(aes(x=Zeitstempel,y=Abflussmenge))
+interval_pull(data$Zeitstempel)
+summary(data)
+
+#missing values----
+
+#see missing values
+sum(is.na(data$Abflussmenge))
+sum(is.na(data$Abflussmenge))/length(data$Zeitstempel)
+
+which(as.difftime(5, units = "mins") != difference(data$Zeitstempel,1))
+na_index <- which(is.na(data$Abflussmenge)== TRUE)
+View(data[na_index,])
+
+#identify / fill gaps
+has_gaps(data)
+count_gaps(data)
+scan_gaps(data)
+
+#total missing values visualized
+data %>% drop_na() %>% count_gaps() %>% mutate(val="Abflussmenge") %>%
+  ggplot(aes(x = val, colour = val)) +
+  geom_linerange(aes(ymin = .from, ymax = .to)) +
+  geom_point(aes(y = .from)) +
+  geom_point(aes(y = .to)) +
+  coord_flip() +
+  theme(legend.position = "bottom")
+
+data %>% drop_na() %>% count_gaps() %>% count(.n)
+data %>% drop_na() %>% count_gaps() %>% select(".n") %>%
+  sum()
+
 ```
-
-# Raw AR, MA, ARMA and ARIMA Functions
+#Filling Gaps
 ```{r}
-my_MA <- function(ts, q, thetas){
-  # verify equal length of q and thetas
-  if(q+1!=length(thetas)){errorCondition("Inputs to my_MA are inapproriate.")}
-  # thetas need to contain 1 as first value 
-  # as the current noise innovation is not scaled => multiplied with 1
-  out <- rep(NA, length(ts))
-  
-  for(i in seq_along(ts)){
-    if(i-q<1){
-      out[i] <- NA
-      
-    }else{
-      out[i] <- sum(thetas * ts[i:i-q])
-  }
-  }
-  return(out)  
-}
-my_AR <- function(ts, q, phis){
-  # verify equal length of q and thetas
-  if(q!=length(thetas)){errorCondition("Inputs to my_AR are inapproriate.")}
-  # thetas need to contain 1 as first value 
-  # as the current noise innovation is not scaled => multiplied with 1
-  out <- rep(NA, length(ts))
-  
-  for(i in seq_along(ts)){
-    if(i-q<1){
-      out[i] <- ts[i]
-      
-    }else{
-      out[i] <- sum(phis * out[seq(i-q,i-1,1)]) + ts[i]
-    }
-    out
-  }
-  return(out)  
-}
+
+data %<>% fill_gaps( .full = TRUE)
+ggplot_na_distribution(data)
+ggplot_na_intervals(data)
+ggplot_na_gapsize(data)
+data_kalman <- na_kalman(data)
+has_gaps(data_kalman)
+ggplot_na_imputations(data, data_kalman)
+
+```
+#decomposition of time series with stl
+```{r}
+#aus fpp3
+decomp<- data_kalman %>%
+  model(stl = STL(Abflussmenge)) %>%
+  components()
+
+decomp %>%
+  as_tsibble() %>%
+  autoplot(Abflussmenge, colour="gray") +
+  geom_line(mapping= aes(y=trend), colour = "#D55E00") +
+  labs(
+    y = "flow rate",
+    x = "time",
+    title = "Flow rate of the Rhine in Basel")
+
+autoplot(decomp)
+
+#is heteroscedastic
+remainder <- decomp$remainder
 
 
-# manual testing code
-# ts <- c(1:10)
-# q <- 3
-# thetas <- c(1, 0.8, 0.9, 0.4)
-# phis <- c(0.8, 0.9, 0.4)
-# usual testing
-# my_MA(
-#   c(1:10),
-#   3,
-#   c(1, 0.8, 0.9, 0.4))
-set.seed(123)
-aux_ts <- rnorm(100)
-ar <- my_AR(
-  aux_ts,
-  1,
-  c(0.6))
-aux_ts <- tsibble(ts = ts, index = c(1:length(ts)))
-aux_ts %>% model(
-  AR1 = ARIMA(ts ~ pdq(1, 0, 0), )
-)
-plot(c(1:length(ar)), ar, type ="l")
+acf(remainder)
 ```
 
 # Raw Auto-Corr
@@ -90,11 +106,11 @@ plot(t, y_stationary, "l")
 my_autocorr <- function(ts, q){
     aux <- tibble(counter = as.integer(), autocorr = as.double())
     for (i in seq_along(c(1:q))){
-    table <- 
+    table <-
         tibble(
-            ts = ts, 
-            lagged_ts = lag(ts, i)) %>% 
-        drop_na() %>% 
+            ts = ts,
+            lagged_ts = lag(ts, i)) %>%
+        drop_na() %>%
         summarise(
             autocorr = cov(ts, lagged_ts)/(sd(ts) * sd(lagged_ts))
             )
@@ -105,7 +121,7 @@ my_autocorr <- function(ts, q){
 }
 
 test <- acf(y_stationary, 7)
-test$acf[-1] 
+test$acf[-1]
 my_autocorr(y_stationary, 7) %>% arrange(counter)  %>% pull(autocorr)
 ((test$acf[-1] - my_autocorr(y_stationary, 7) %>% arrange(counter)  %>% pull(autocorr))/test$acf[-1]) %>% mean()
 
