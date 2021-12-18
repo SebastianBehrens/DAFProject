@@ -16,6 +16,74 @@ data %<>% as_tsibble() %<>%
   select(-c("Wasserstand","Pegel"))
 ```
 
+data %>% arrange(desc(Zeitstempel)) %>% mutate(diff = lag(Zeitstempel) - Zeitstempel)%>% group_by(diff) %>% summarise(counter = n())
+plot(data$Zeitstempel, data$Abflussmenge)
+plot(data$Zeitstempel, data$Pegel)
+plot(data$Zeitstempel, data$Wasserstand)
+```
+
+# Raw AR, MA, ARMA and ARIMA Functions
+
+```{r}
+my_MA <- function(ts, q, thetas){
+  # verify equal length of q and thetas
+  if(q+1!=length(thetas)){errorCondition("Inputs to my_MA are inapproriate.")}
+  # thetas need to contain 1 as first value 
+  # as the current noise innovation is not scaled => multiplied with 1
+  out <- rep(NA, length(ts))
+  
+  for(i in seq_along(ts)){
+    if(i-q<1){
+      out[i] <- NA
+      
+    }else{
+      out[i] <- sum(thetas * ts[i:i-q])
+  }
+  }
+  return(out)  
+}
+my_AR <- function(ts, q, phis){
+  # verify equal length of q and thetas
+  if(q!=length(thetas)){errorCondition("Inputs to my_AR are inapproriate.")}
+  # thetas need to contain 1 as first value 
+  # as the current noise innovation is not scaled => multiplied with 1
+  out <- rep(NA, length(ts))
+  
+  for(i in seq_along(ts)){
+    if(i-q<1){
+      out[i] <- ts[i]
+      
+    }else{
+      out[i] <- sum(phis * out[seq(i-q,i-1,1)]) + ts[i]
+    }
+    out
+  }
+  return(out)  
+}
+
+
+# manual testing code
+# ts <- c(1:10)
+# q <- 3
+# thetas <- c(1, 0.8, 0.9, 0.4)
+# phis <- c(0.8, 0.9, 0.4)
+# usual testing
+# my_MA(
+#   c(1:10),
+#   3,
+#   c(1, 0.8, 0.9, 0.4))
+set.seed(123)
+aux_ts <- rnorm(100)
+ar <- my_AR(
+  aux_ts,
+  1,
+  c(0.6))
+aux_ts <- tsibble(ts = ts, index = c(1:length(ts)))
+aux_ts %>% model(
+  AR1 = ARIMA(ts ~ pdq(1, 0, 0), )
+)
+plot(c(1:length(ar)), ar, type ="l")
+
 # First Analysis
 ```{r}
 length(data$Zeitstempel)
