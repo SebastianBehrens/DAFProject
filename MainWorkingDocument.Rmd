@@ -3,20 +3,18 @@ output: html_document
 editor_options:
   chunk_output_type: console
 ---
-# Loading Data
+# Loading Packages and Data
 ```{r}
 # install.packages("tidyverse")
 # install.packages("fpp3")
 # install.packages("imputeTS")
+rm(list = ls())
 library(tidyverse)
 library(fpp3)
 library(magrittr)
 library(imputeTS)
-rm(list = ls())
 data <- read_delim("BaselMessungen.csv", delim = ";")
 data %<>% select(-c("Wasserstand","Pegel")) %>% as_tsibble()
-# working with tibble for EDA (tsibble does not fully support the dplyr package)
-# for modelling we will transform the object into a tsibble object
 ```
 
 # First EDA
@@ -50,6 +48,16 @@ theme_set(
 ggplot(data)+
   geom_line(aes(x=Zeitstempel,y=Abflussmenge))
 ```
+## More Sophisticated Inspectional Plot
+```{r}
+data %>%
+  gg_tsdisplay(Abflussmenge, plot_type='partial')
+```
+Notes:
+- indicates high positive correlation with recent past (1-2 days)
+- indicates medium to low negative correlation with little less recent past (7-9 days)
+- indicates low positive correlation with distant past (33 days)
+
 
 ## Summary Statistics
 ```{r}
@@ -79,8 +87,15 @@ check1
 ## Visualising Missing Values
 ```{r}
 # augmenting all time slots with missing data
-all_measurements <- tibble(Zeitstempel = seq(as.POSIXct(min(data$Zeitstempel)), as.POSIXct(max(data$Zeitstempel)), by = "5 min"))
-data <- data %>% full_join(all_measurements, by = "Zeitstempel")
+# all_measurements <- tibble(
+#   Zeitstempel = 
+#     seq(
+#       as.POSIXct(min(data$Zeitstempel)), as.POSIXct(max(data$Zeitstempel)),
+#       by = "5 min")
+#   )
+# data %<>% full_join(all_measurements, by = "Zeitstempel")
+
+data %<>% fill_gaps(.full = TRUE) # alternative
 
 #old plot (points on time line)
 # missing_data_plot <- data %>%
@@ -107,11 +122,127 @@ data %>% ggplot(aes(Zeitstempel, Abflussmenge)) + geom_line() + geom_vline(xinte
 ggplot_na_intervals(data)
 ggplot_na_gapsize(data)
 
-data <- na_kalman(data)
-has_gaps(data)
-ggplot_na_imputations(data, data)
+data_imputed <- na_kalman(data)
+data <- data_imputed
+
+
+data_imputed %>% as_tibble()
+aux <- data %>%
+  as_tibble() %>%
+  mutate(origin = "unimputed", missing = ifelse(is.na(Abflussmenge), 1, 0)) %>%
+  full_join(data_imputed %>% as_tibble() %>% mutate(origin = "imputed"), by = "Zeitstempel")
+
+
+aux %>% filter(missing == 1)
+data[!complete.cases(data),]
+aux %>% mutate(is_imputed = ifelse(origin == "imputed", 1, 0)) %>% ggplot(aes(Zeitstempel, Abflussmenge, color = "is_imputed")) + geom_point()
+
+aux_dot_size <- 0.1
+data %>% ggplot(aes(Zeitstempel, Abflussmenge)) + geom_point(size = aux_dot_size, color = "grey") + geom_point(data = aux %>% filter(missing == 1), aes(Zeitstempel, Abflussmenge.y), col = "black", size = aux_dot_size) 
 ```
 
+
+# Decomposition
+## Decomposition with STL (LOESS)
+```{r}
+# # testing decomposition without imputed data
+# data %<>% arrange(Zeitstempel)
+# which(data$Zeitstempel == as_datetime("2021-04-18 09:00:00"))
+# data <- data[86233:149422, ]
+
+# decomposition using default values of the STL function
+decomposition <- data %>%
+  model(stl = STL(Abflussmenge)) %>%
+  components() 
+# SS <- decomposition %>% pull(remainder) %>% my_squarer() %>% sum()
+# SS
+
+my_squarer <- function(x){x^2} 
+my_squarer <- Vectorize(my_squarer)
+optimal_i_values <- tibble(trend_i = as.double(), 
+                           season_i = as.double(),
+                           sum = as.double())
+
+trend_i_max <- 5
+season_i_max <- 5
+
+for(aux_trend_i in c(1:trend_i_max)){
+  for(aux_season_i in c(1:season_i_max)){
+    aux_decomposition_sum <- data %>%
+      model(stl = STL(Abflussmenge ~ trend(window = aux_trend_i) + season(window = aux_season_i))) %>%
+      components() %>% pull(remainder) %>% my_squarer() %>% sum()
+    
+    optimal_i_values %<>% complete(trend_i = aux_trend_i,
+                                   season_i = aux_season_i,
+                                   sum = aux_decomposition_sum)
+    
+  }
+    
+}
+optimal_i_values
+
+test_decomposition <- data %>%
+  model(stl = STL(Abflussmenge ~ trend(window = 3) + season(window = 5))) %>%
+  components() 
+data %>% model(test_decomposition)
+
+test_decomposition %>%
+  as_tsibble() %>%
+  autoplot(Abflussmenge, color = "grey") +
+  geom_line(mapping= aes(y=trend), colour = "black") +
+  labs(
+    y = "flow rate",
+    x = "time",
+    title = "Flow rate of the Rhine in Basel")
+```
+
+## Visualising the Decomposition
+```{r}
+decomposition %>%
+  as_tsibble() %>%
+  autoplot(Abflussmenge, color = "grey") +
+  geom_line(mapping= aes(y=trend), colour = "black") +
+  labs(
+    y = "flow rate",
+    x = "time",
+    title = "Flow rate of the Rhine in Basel")
+```
+
+```{r}
+autoplot(decomposition)
+```
+
+## Checking Error Term (Heteroscedasticity)
+```{r}
+#is heteroscedastic
+remainder <- decomposition$remainder
+acf(remainder)
+```
+
+# Modelling 
+```{r}
+# Remark: takes long time to run
+fits <- data %>%
+  model(
+    # arima210 = ARIMA(Abflussmenge ~ pdq(3,1,0)),
+    arima = ARIMA(Abflussmenge ~ pdq(1:5, 1:5, 1:5)),
+    stepwise = ARIMA(Abflussmenge, ic = "aicc"), # searches on its own here (stepwise)
+    search = ARIMA(Abflussmenge, ic = "aicc", stepwise=FALSE)
+    )
+save(fits, file = "fits.rda")
+fits_backup <- fits
+
+fits %>% glance(fits) %>% arrange(desc(BIC))
+```
+
+
+
+
+
+
+
+
+- - - - - - - - - -
 # Raw AR, MA, ARMA and ARIMA Functions
 
 ```{r}
@@ -207,36 +338,3 @@ my_autocorr(y_stationary, 7) %>% arrange(counter)  %>% pull(autocorr)
 ```
 works fairly accurate — relative error 1%
 
-
-
-# Decomposition
-## Decomposition with STL (LOESS)
-```{r}
-#aus fpp3
-decomposition <- data %>%
-  model(stl = STL(Abflussmenge)) %>%
-  components()
-```
-
-## Visualising the Decomposition
-```{r}
-decomposition %>%
-  as_tsibble() %>%
-  autoplot(Abflussmenge, color = "grey") +
-  geom_line(mapping= aes(y=trend), colour = "black") +
-  labs(
-    y = "flow rate",
-    x = "time",
-    title = "Flow rate of the Rhine in Basel")
-```
-
-```{r}
-autoplot(decomposition)
-```
-
-## Checking Error Term (Heteroscedasticity)
-```{r}
-#is heteroscedastic
-remainder <- decomposition$remainder
-acf(remainder)
-```
