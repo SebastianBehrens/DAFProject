@@ -141,9 +141,45 @@ aux_dot_size <- 0.1
 data %>% ggplot(aes(Zeitstempel, Abflussmenge)) + geom_point(size = aux_dot_size, color = "grey") + geom_point(data = aux %>% filter(missing == 1), aes(Zeitstempel, Abflussmenge.y), col = "black", size = aux_dot_size) 
 ```
 
+## Inspecton of Auto-Correlation Function
+```{r}
+# acf(data, lag.max = 100)
+# acf(data, lag.max = 1000)
+acf(data, lag.max = 10000)
+```
+Due to the high frequency of measurements (every five minutes) and very long time series (144'000 observations), one needs to set the lag.max very high to see the autocorrelation between observations for longer time periods.
+
+The acf plot appears to have a very strong autoregressive part, where perturbations to some mean carry a lot of momentum through time and induce very high autocorrelations over time.
+
+For that reason, we can look at partial autocorrelations.
+```{r}
+pacf(data, lag.max = 30)
+pacf(data, lag.max = 100)
+pacf_data <- pacf(data, lag.max = 100000, plot = F)
+```
+
+The logic behind partial autocorrelations filters the correlation of some time span for the autocorrelations of shorter time spans, leaving behind 'autocorrelation unexplained by autocorrelation of smaller time spans'. Precisely that logic, restricts the impact the high momentum perturbations have on the time series.
+
+The plot indicates the following:
+\begin{itemize}
+  \item A statistically very significant strong but quickly decreasing negative auto-correlation for the very recent past (past 5 to 20 minutes).
+  \item A statistically very significant moderate and slowly increasing auto-correlation for the little less recent past (past 20 to 45 minutes) which fades out within 20 minutes (past 45 to 65 minutes).
+  \item A statistically significant weak but somewhat consistent auto-correlation for the somewhat distant past (past 95 - 115 minutes)
+\end{itemize}
+
+a statistically very significant quickly decreasing negative auto-correlation for the very recent past (past 5 to 20 minutes). A statistically very significant slowly increasing auto-correlation for the little less recent past (20 to 45 minutes) which fades out within 20 minutes.
 
 # Decomposition
+## Decomposition with `stats::decompose()`
+```{r}
+frequency(data)
+decomposition_simple <- as.ts(data, frequency = 288) %>% decompose()
+
+plot(decomposition_simple)
+```
+
 ## Decomposition with STL (LOESS)
+Since ``stats::decompose()` decomposes into a trend and a single seasonal component only we will now try a different more fine-grained decomposition into multiple seasonal components. While doing so we also forego a central but also limiting assumption of the previous decomposition, being that the seasonality must be consistent (i.e. not varying) with time. In other words, a singel seasonality pattern is assumed to fit the whole time series, disregarding more fine-grained seasonalities, that aggregate to a seasonality with component with differing patterns over time.
 ```{r}
 # # testing decomposition without imputed data
 # data %<>% arrange(Zeitstempel)
@@ -222,17 +258,27 @@ acf(remainder)
 # Modelling 
 ```{r}
 # Remark: takes long time to run
-fits <- data %>%
-  model(
-    # arima210 = ARIMA(Abflussmenge ~ pdq(3,1,0)),
-    arima = ARIMA(Abflussmenge ~ pdq(1:5, 1:5, 1:5)),
-    stepwise = ARIMA(Abflussmenge, ic = "aicc"), # searches on its own here (stepwise)
-    search = ARIMA(Abflussmenge, ic = "aicc", stepwise=FALSE)
-    )
-save(fits, file = "fits.rda")
+# commented out because takes long time to run. load("fits.rda") gets the object.
+# fits <- data %>%
+#   model(
+#     arima = ARIMA(Abflussmenge ~ pdq(1:5, 1:5, 1:5)),
+#     stepwise = ARIMA(Abflussmenge, ic = "aicc"), # searches on its own here (stepwise)
+#     search = ARIMA(Abflussmenge, ic = "aicc", stepwise=FALSE)
+#     )
+# save(fits, file = "fits.rda")
+
+load("fits.rda")
 fits_backup <- fits
 
 fits %>% glance(fits) %>% arrange(desc(BIC))
+fits %>% select(arima) %>% report()
+fits %>% select(stepwise) %>% report()
+fits %>% select(search) %>% report()
+# they all end up with the same coefficient estimates 
+
+fits %>% 
+  select(arima) %>%
+  gg_tsresiduals()
 ```
 
 
@@ -337,4 +383,6 @@ my_autocorr(y_stationary, 7) %>% arrange(counter)  %>% pull(autocorr)
 
 ```
 works fairly accurate — relative error 1%
+
+
 
