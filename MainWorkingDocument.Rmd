@@ -38,7 +38,8 @@ theme_set(
             strip.text = element_text(size = 12)
             # legend.margin = margin(6, 10, 6, 6)
             # legend.box.background = element_rect(colour = "black")
-            )
+
+                        )
     
     )
 
@@ -117,28 +118,24 @@ data %>% ggplot(aes(Zeitstempel, Abflussmenge)) + geom_line() + geom_vline(xinte
 
 
 ## Impute Missing Values
-```{r}
+```{r, warning = FALSE}
 # data %<>% fill_gaps(.full = TRUE) # somewhat obsolete after augmentation above
 ggplot_na_intervals(data)
 ggplot_na_gapsize(data)
 
 data_imputed <- na_kalman(data)
-data <- data_imputed
 
-
-data_imputed %>% as_tibble()
 aux <- data %>%
   as_tibble() %>%
   mutate(origin = "unimputed", missing = ifelse(is.na(Abflussmenge), 1, 0)) %>%
-  full_join(data_imputed %>% as_tibble() %>% mutate(origin = "imputed"), by = "Zeitstempel")
+  full_join(data_imputed %>% as_tibble(), by = "Zeitstempel")
 
 
-aux %>% filter(missing == 1)
-data[!complete.cases(data),]
-aux %>% mutate(is_imputed = ifelse(origin == "imputed", 1, 0)) %>% ggplot(aes(Zeitstempel, Abflussmenge, color = "is_imputed")) + geom_point()
 
 aux_dot_size <- 0.1
 data %>% ggplot(aes(Zeitstempel, Abflussmenge)) + geom_point(size = aux_dot_size, color = "grey") + geom_point(data = aux %>% filter(missing == 1), aes(Zeitstempel, Abflussmenge.y), col = "black", size = aux_dot_size) 
+
+data <- data_imputed
 ```
 
 ## Inspecton of Auto-Correlation Function
@@ -146,6 +143,12 @@ data %>% ggplot(aes(Zeitstempel, Abflussmenge)) + geom_point(size = aux_dot_size
 # acf(data, lag.max = 100)
 # acf(data, lag.max = 1000)
 acf(data, lag.max = 10000)
+
+# testing what a lag of 0.0034 means
+# test <- acf(data, lag.max = 10000)
+# test$lag %>% head()
+# 5/0.003472222
+# 1440 * 5/60
 ```
 Due to the high frequency of measurements (every five minutes) and very long time series (144'000 observations), one needs to set the lag.max very high to see the autocorrelation between observations for longer time periods.
 
@@ -153,9 +156,10 @@ The acf plot appears to have a very strong autoregressive part, where perturbati
 
 For that reason, we can look at partial autocorrelations.
 ```{r}
-pacf(data, lag.max = 30)
 pacf(data, lag.max = 100)
-pacf_data <- pacf(data, lag.max = 100000, plot = F)
+pacf(data, lag.max = 1000)
+pacf(data, lag.max = 10000)
+
 ```
 
 The logic behind partial autocorrelations filters the correlation of some time span for the autocorrelations of shorter time spans, leaving behind 'autocorrelation unexplained by autocorrelation of smaller time spans'. Precisely that logic, restricts the impact the high momentum perturbations have on the time series.
@@ -168,6 +172,35 @@ The plot indicates the following:
 \end{itemize}
 
 a statistically very significant quickly decreasing negative auto-correlation for the very recent past (past 5 to 20 minutes). A statistically very significant slowly increasing auto-correlation for the little less recent past (20 to 45 minutes) which fades out within 20 minutes.
+
+
+```{r}
+# pacf <- pacf(data, lag.max = 100000, plot = F)
+# save(pacf, file = "pacf100000.rda")
+load("pacf100000.rda")
+pacf_data <- tibble(
+  lag = c(0:(length(pacf$acf)-1)),
+  autocorr = pacf$acf,
+  ) %>% 
+  filter(lag!=0) %>% 
+  mutate(autocorr = as.double(autocorr))
+```
+With a significance level so low ($\frac{1}{\sqrt{n_{\text{obs}}}}$), a lot of auto-correlations are statistically significant, even if they are unreasonably low (e.g. 0.003).
+```{r}
+pacf_data %>% arrange(desc(abs(autocorr)))# %>%  filter(autocorr > 0.09)
+```
+However, only lags 1 and 9 are larger than 0.1 in absolute terms.
+**Consequences?**
+```{r}
+# lag plot of white noise
+WN = ts(rnorm(300))
+lag.plot(WN, lag = 10)
+```
+
+
+
+
+
 
 # Decomposition
 ## Decomposition with `stats::decompose()`
@@ -187,75 +220,155 @@ Since ``stats::decompose()` decomposes into a trend and a single seasonal compon
 # data <- data[86233:149422, ]
 
 # decomposition using default values of the STL function
-decomposition <- data %>%
+decomposition_stl <- data %>%
   model(stl = STL(Abflussmenge)) %>%
   components() 
-# SS <- decomposition %>% pull(remainder) %>% my_squarer() %>% sum()
-# SS
-
-my_squarer <- function(x){x^2} 
-my_squarer <- Vectorize(my_squarer)
-optimal_i_values <- tibble(trend_i = as.double(), 
-                           season_i = as.double(),
-                           sum = as.double())
-
-trend_i_max <- 5
-season_i_max <- 5
-
-for(aux_trend_i in c(1:trend_i_max)){
-  for(aux_season_i in c(1:season_i_max)){
-    aux_decomposition_sum <- data %>%
-      model(stl = STL(Abflussmenge ~ trend(window = aux_trend_i) + season(window = aux_season_i))) %>%
-      components() %>% pull(remainder) %>% my_squarer() %>% sum()
-    
-    optimal_i_values %<>% complete(trend_i = aux_trend_i,
-                                   season_i = aux_season_i,
-                                   sum = aux_decomposition_sum)
-    
-  }
-    
-}
-optimal_i_values
-
-test_decomposition <- data %>%
-  model(stl = STL(Abflussmenge ~ trend(window = 3) + season(window = 5))) %>%
-  components() 
-data %>% model(test_decomposition)
-
-test_decomposition %>%
-  as_tsibble() %>%
-  autoplot(Abflussmenge, color = "grey") +
-  geom_line(mapping= aes(y=trend), colour = "black") +
-  labs(
-    y = "flow rate",
-    x = "time",
-    title = "Flow rate of the Rhine in Basel")
 ```
 
-## Visualising the Decomposition
+## Comparing the Decompositions by Trend (Visually)
 ```{r}
-decomposition %>%
-  as_tsibble() %>%
-  autoplot(Abflussmenge, color = "grey") +
-  geom_line(mapping= aes(y=trend), colour = "black") +
+data %>% ggplot(aes(Zeitstempel, Abflussmenge)) +
+  geom_line(colour = "grey") +
+  geom_line(aes(y = decomposition_stl$trend), colour = "red") +
+  geom_line(aes(y = decomposition_simple$trend), colour = "blue") +
   labs(
     y = "flow rate",
     x = "time",
-    title = "Flow rate of the Rhine in Basel")
+    title = "Flow rate of the Rhine in Basel",)
 ```
 
+## Comparing the Decompositions by Trend (Numerically)
+```{r}
+
+decomposition_comparison <- tibble(remainder_posttrend_stl = 
+                data$Abflussmenge-decomposition_stl$trend, 
+              remainder_posttrend_simple =
+                data$Abflussmenge-decomposition_simple$trend
+              )
+decomposition_comparison %>% summarise(
+  remainder_posttrend_stl_mean = mean(remainder_posttrend_stl, na.rm = T),
+  remainder_posttrend_simple_mean = mean(remainder_posttrend_simple, na.rm = T)
+)
+
+```
+## Conclusion on the Comparison
+One can see that filtering the time series for the stl-trend leaves a smaller less varyying time series. That can be interpreted as the stl-trend captures more than the simple-trend. On the flip-side, this comparatively worse-fitting stl-trend can be deemed less overfitting, which is alsoindicated by various erratic movements in the trend. We will thus, continue with the trend estimated by stl.
 ```{r}
 autoplot(decomposition)
 ```
 
 ## Checking Error Term (Heteroscedasticity)
+
 ```{r}
 #is heteroscedastic
 remainder <- decomposition$remainder
 acf(remainder)
 ```
 
-# Modelling 
+# Modelling
+## Filtering for Trend
+```{r}
+data %<>% 
+  mutate(Abflussmenge_f_t = Abflussmenge - decomposition_stl$trend)
+
+data
+```
+### Inspecting the Filtered TS
+```{r}
+data %>%
+  gg_tsdisplay(Abflussmenge_f_t, plot_type='partial')
+```
+
+As visible by the plot (:::), the time series is not yet covariance stationary, a requirement for further application fo ARMA and ARIMA modelling, as the variance of the time series varies heavily throughout the time span of the time series.
+We will therefore continue to filter out additional seasonality components estimated with the Loess method.
+### Quick Check (maybe out)
+```{r}
+data %>% mutate(first_diff = Abflussmenge_f_t - lag(Abflussmenge_f_t)) %>% 
+  gg_tsdisplay(first_diff, plot_type = "partial")
+```
+
+## Filtering for Seasonalities
+```{r}
+data %<>% 
+  mutate(
+    Abflussmenge_f_ts = Abflussmenge_f_t - decomposition_stl$season_hour - decomposition_stl$season_day - decomposition_stl$season_week)
+```
+### Inspecting the Filtered TS
+```{r}
+data %>%
+  gg_tsdisplay(Abflussmenge_f_ts, plot_type='partial')
+```
+The time series looses a bit of variance, especially at the highly varying time sections. We will therefore, now take first differences to make the time series more stationary and reduce the extent of varying variance.
+### Quick Check (maybe out)
+```{r}
+data %<>% mutate(Abflussmenge_f_ts_fd = Abflussmenge_f_ts - lag(Abflussmenge_f_ts)) 
+data %>% 
+  gg_tsdisplay(Abflussmenge_f_ts_fd, plot_type = "partial")
+```
+This results in a time series not fully covariance stationary, as variance does increase strongly at time.
+Additionally, auto-correlation is rather widely spread for a given time difference as visible in the next plot:
+```{r}
+lag.plot(ts(data$Abflussmenge_f_ts_fd[-1]), lags = 4, )
+```
+For the first few lagged plots of the time series (filtered for trend and seasonality as well as first differences taken) auto-correlation appears to be centered around zero, even if not always exactly zero (necessary for covariance stationarity). This hints to further patterns to be extractable, as it is also shown in strong (partial) auto-correlations:
+```{r}
+# pacf <- pacf(data$Abflussmenge_f_ts_fd[-1], lag.max = 100000, plot = F)
+# save(pacf, file = "pacf100000_f_ts_fd.rda")
+load("pacf100000_f_ts_fd.rda")
+pacf_data <- tibble(
+  lag = c(0:(length(pacf$acf)-1)),
+  autocorr = pacf$acf,
+  ) %>% 
+  filter(lag!=0) %>% 
+  mutate(autocorr = as.double(autocorr))
+pacf_data %>% arrange(desc(abs(autocorr))) %>% filter(autocorr>0.09)
+```
+One can now observe 14 comparatively high and significant partial autocorrelations above 0.09 which allows for further pattern extraction.
+
+```{r}
+# Remark: takes long time to run
+# commented out because takes long time to run. load("fits.rda") gets the object.
+# fits <- data %>%
+#   model(
+#     arima = ARIMA(Abflussmenge ~ pdq(1:5, 1:5, 1:5)),
+#     stepwise = ARIMA(Abflussmenge, ic = "aicc"), # searches on its own here (stepwise)
+#     search = ARIMA(Abflussmenge, ic = "aicc", stepwise=FALSE)
+#     )
+# save(fits, file = "fits.rda")
+
+load("fits.rda")
+fits_backup <- fits
+
+# fits %>% glance(fits) %>% arrange(desc(BIC))
+# fits %>% select(arima) %>% report()
+fits %>% select(stepwise) %>% report()
+# fits %>% select(search) %>% report()
+
+
+fits %>% 
+  select(stepwise) %>%
+  gg_tsresiduals()
+
+# partial auto correlation after filtering for filtering for arima ---------------------------------
+fits %>% select(stepwise) %>% report()
+
+pacf <- pacf(data$Abflussmenge_f_ts_fd[-1], lag.max = 100000, plot = F)
+# save(pacf, file = "pacf100000_f_ts_fd.rda")
+# load("pacf100000_f_ts_fd.rda")
+pacf_data <- tibble(
+  lag = c(0:(length(pacf$acf)-1)),
+  autocorr = pacf$acf,
+  ) %>% 
+  filter(lag!=0) %>% 
+  mutate(autocorr = as.double(autocorr))
+pacf_data %>% arrange(desc(abs(autocorr))) %>% filter(autocorr>0.09)
+
+```
+The arima fit that is found via a stepwise search (#unfinished explain more how this solution is found to show we understand it), yields very significant parameter estimates. (#idea one could visualise the estimates with confidence interval (error bars) and give interpretations to the estimates (the estimated arima model))
+However, there are two issues: a) there persist strong autocorrelations, b) the error is (as previously hinted to) heteroscedastic.
+
+## Fitting a GARCH model
+## Blind fitting on TS itself
 ```{r}
 # Remark: takes long time to run
 # commented out because takes long time to run. load("fits.rda") gets the object.
