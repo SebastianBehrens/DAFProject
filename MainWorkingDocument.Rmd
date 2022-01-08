@@ -1,5 +1,7 @@
 ---
-output: html_document
+output:
+  pdf_document: default
+  html_document: default
 editor_options:
   chunk_output_type: console
 ---
@@ -52,7 +54,7 @@ ggplot(data)+
 ## More Sophisticated Inspectional Plot
 ```{r}
 data %>%
-  gg_tsdisplay(Abflussmenge, plot_type='partial')
+  gg_tsdisplay(Abflussmenge, plot_type='partial') #muss das nicht hinter fill_gaps geschoben werden? ansonsten entsteht ein error?
 ```
 Notes:
 - indicates high positive correlation with recent past (1-2 days)
@@ -254,14 +256,14 @@ decomposition_comparison %>% summarise(
 ## Conclusion on the Comparison
 One can see that filtering the time series for the stl-trend leaves a smaller less varyying time series. That can be interpreted as the stl-trend captures more than the simple-trend. On the flip-side, this comparatively worse-fitting stl-trend can be deemed less overfitting, which is alsoindicated by various erratic movements in the trend. We will thus, continue with the trend estimated by stl.
 ```{r}
-autoplot(decomposition)
+autoplot(decomposition_stl) # decomposition wurde in decompostion_stl umbenannt
 ```
 
 ## Checking Error Term (Heteroscedasticity)
 
 ```{r}
 #is heteroscedastic
-remainder <- decomposition$remainder
+remainder <- decomposition_stl$remainder #in _stl umbennant
 acf(remainder)
 ```
 
@@ -424,7 +426,7 @@ my_MA <- function(ts, q, thetas){
 }
 my_AR <- function(ts, q, phis){
   # verify equal length of q and thetas
-  if(q!=length(thetas)){errorCondition("Inputs to my_AR are inapproriate.")}
+  if(q!=length(phis)){errorCondition("Inputs to my_AR are inapproriate.")} #switched thetas to phis
   # thetas need to contain 1 as first value 
   # as the current noise innovation is not scaled => multiplied with 1
   out <- rep(NA, length(ts))
@@ -443,7 +445,7 @@ my_AR <- function(ts, q, phis){
 
 
 # manual testing code
-# ts <- c(1:10)
+ts <- c(1:10) #wird unten verwendet tsibble von aux-ts
 # q <- 3
 # thetas <- c(1, 0.8, 0.9, 0.4)
 # phis <- c(0.8, 0.9, 0.4)
