@@ -51,16 +51,6 @@ theme_set(
 ggplot(data)+
   geom_line(aes(x=Zeitstempel,y=Abflussmenge))
 ```
-## More Sophisticated Inspectional Plot
-```{r}
-data %>%
-  gg_tsdisplay(Abflussmenge, plot_type='partial') #muss das nicht hinter fill_gaps geschoben werden? ansonsten entsteht ein error?
-```
-Notes:
-- indicates high positive correlation with recent past (1-2 days)
-- indicates medium to low negative correlation with little less recent past (7-9 days)
-- indicates low positive correlation with distant past (33 days)
-
 
 ## Summary Statistics
 ```{r}
@@ -118,10 +108,18 @@ missing_datapoints <- data %>%
 data %>% ggplot(aes(Zeitstempel, Abflussmenge)) + geom_line() + geom_vline(xintercept = missing_datapoints, col = "grey")
 ```
 
+## More Sophisticated Inspectional Plot (comment für anderen plot; data im falschen zustand für den komment; to be moved)
+```{r}
+data %>% gg_tsdisplay(Abflussmenge, plot_type='partial')
+```
+Notes:
+- indicates high positive correlation with recent past (1-2 days)
+- indicates medium to low negative correlation with little less recent past (7-9 days)
+- indicates low positive correlation with distant past (33 days)
+
 
 ## Impute Missing Values
 ```{r, warning = FALSE}
-# data %<>% fill_gaps(.full = TRUE) # somewhat obsolete after augmentation above
 ggplot_na_intervals(data)
 ggplot_na_gapsize(data)
 
@@ -133,18 +131,18 @@ aux <- data %>%
   full_join(data_imputed %>% as_tibble(), by = "Zeitstempel")
 
 
-
+aux %>% filter(missing == 1)
 aux_dot_size <- 0.1
 data %>% ggplot(aes(Zeitstempel, Abflussmenge)) + geom_point(size = aux_dot_size, color = "grey") + geom_point(data = aux %>% filter(missing == 1), aes(Zeitstempel, Abflussmenge.y), col = "black", size = aux_dot_size) 
 
 data <- data_imputed
 ```
 
-## Inspecton of Auto-Correlation Function
+## Inspecton of Auto-Correlation Function (not right place)
 ```{r}
-# acf(data, lag.max = 100)
+acf(data, lag.max = 100)
 # acf(data, lag.max = 1000)
-acf(data, lag.max = 10000)
+# acf(data, lag.max = 10000)
 
 # testing what a lag of 0.0034 means
 # test <- acf(data, lag.max = 10000)
@@ -192,26 +190,24 @@ With a significance level so low ($\frac{1}{\sqrt{n_{\text{obs}}}}$), a lot of a
 pacf_data %>% arrange(desc(abs(autocorr)))# %>%  filter(autocorr > 0.09)
 ```
 However, only lags 1 and 9 are larger than 0.1 in absolute terms.
-**Consequences?**
+**Consequences?** #missing
 ```{r}
 # lag plot of white noise
-WN = ts(rnorm(300))
+WN = ts(rnorm(3000))
 lag.plot(WN, lag = 10)
+acf(WN)
 ```
-
-
-
-
-
 
 # Decomposition
 ## Decomposition with `stats::decompose()`
 ```{r}
 frequency(data)
 decomposition_simple <- as.ts(data, frequency = 288) %>% decompose()
-
-plot(decomposition_simple)
+autoplot(decomposition_simple)
 ```
+
+Remark: We suspect the extreme measurement closely after 2300 is due to error. There are ca. 20 missing values closely before five measurements at around 1600 after which the time series continues at around value 800. We suspect that to be a measurement error.
+
 
 ## Decomposition with STL (LOESS)
 Since ``stats::decompose()` decomposes into a trend and a single seasonal component only we will now try a different more fine-grained decomposition into multiple seasonal components. While doing so we also forego a central but also limiting assumption of the previous decomposition, being that the seasonality must be consistent (i.e. not varying) with time. In other words, a singel seasonality pattern is assumed to fit the whole time series, disregarding more fine-grained seasonalities, that aggregate to a seasonality with component with differing patterns over time.
@@ -236,12 +232,11 @@ data %>% ggplot(aes(Zeitstempel, Abflussmenge)) +
   labs(
     y = "flow rate",
     x = "time",
-    title = "Flow rate of the Rhine in Basel",)
+    title = "Flow Rate of the Rhine in Basel") #missing (legend missing)
 ```
 
 ## Comparing the Decompositions by Trend (Numerically)
 ```{r}
-
 decomposition_comparison <- tibble(remainder_posttrend_stl = 
                 data$Abflussmenge-decomposition_stl$trend, 
               remainder_posttrend_simple =
@@ -255,16 +250,9 @@ decomposition_comparison %>% summarise(
 ```
 ## Conclusion on the Comparison
 One can see that filtering the time series for the stl-trend leaves a smaller less varyying time series. That can be interpreted as the stl-trend captures more than the simple-trend. On the flip-side, this comparatively worse-fitting stl-trend can be deemed less overfitting, which is alsoindicated by various erratic movements in the trend. We will thus, continue with the trend estimated by stl.
-```{r}
-autoplot(decomposition_stl) # decomposition wurde in decompostion_stl umbenannt
-```
-
-## Checking Error Term (Heteroscedasticity)
 
 ```{r}
-#is heteroscedastic
-remainder <- decomposition_stl$remainder #in _stl umbennant
-acf(remainder)
+autoplot(decomposition_stl)
 ```
 
 # Modelling
@@ -368,8 +356,22 @@ pacf_data %>% arrange(desc(abs(autocorr))) %>% filter(autocorr>0.09)
 ```
 The arima fit that is found via a stepwise search (#unfinished explain more how this solution is found to show we understand it), yields very significant parameter estimates. (#idea one could visualise the estimates with confidence interval (error bars) and give interpretations to the estimates (the estimated arima model))
 However, there are two issues: a) there persist strong autocorrelations, b) the error is (as previously hinted to) heteroscedastic.
+<!-- ################################## -->
+## Checking Error Term (Heteroscedasticity) (again, should only be done after differencing)
+
+```{r}
+#is heteroscedastic
+remainder <- decomposition_stl$remainder 
+acf(remainder)
+```
+
+<!-- ################################## -->
 
 ## Fitting a GARCH model
+```{r}
+
+```
+
 ## Blind fitting on TS itself
 ```{r}
 # Remark: takes long time to run

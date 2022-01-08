@@ -29,3 +29,13 @@ Bei jeder Modelvariante:
     - noch nicht WN => welches nächste Modell testen => Warum 
     (Das Warum in die Überleitung oder so)
     - 
+
+
+# basic process in ts modellin
+1. ts
+2. filter decomposition (trend, seasonality)
+3. model remainder (extract further patterns)
+4. evaluate model(s)
+5. select model
+6. filter model
+continue 3-6 until white noise reached
