@@ -12,6 +12,7 @@ editor_options:
 # install.packages("imputeTS")
 #install.packages("fGarch")
 #install.packages("fitdistrplus")
+#install.packages("rugarch")
 
 rm(list = ls())
 library(tidyverse)
@@ -19,6 +20,7 @@ library(fpp3)
 library(magrittr)
 library(imputeTS)
 library(fGarch)
+library(rugarch)
 library(fitdistrplus)
 data <- read_delim("BaselMessungen.csv", delim = ";")
 data %<>% select(-c("Wasserstand","Pegel")) %>% as_tsibble()
@@ -434,7 +436,37 @@ max(m_garch[,,2])
 best_gfit  <- garchFit(formula = ~ garch(1,5), data=data_GARCH$Abflussmenge_f_ts_fd, cond.dist=condDist)
 forecast_GARCH <- predict(n.ahead= 8640,best_gfit)
 
+#using ugarch from now on
+model_ugarch<-ugarchspec(variance.model = list(model = "sGARCH", garchOrder = c(1, 5)), 
+                  distribution.model = "norm")
 
+#with Rolling to compare performance
+#best_ugfit <- ugarchfit(spec=model_ugarch, data = data_GARCH$Abflussmenge_f_ts_fd, out.sample = 10000)
+#garch_forecast_check <- ugarchforecast(best_ugfit, data = bitcoin, n.ahead = 8640, n.roll =8640)
+#save(best_ugfit, file = "best_ugfit.rda")
+#save(garch_forecast_check, file = "garch_forecast_check.rda")
+load("best_ugfit.rda")
+load("garch_forecast_check 2.rda")
+plot(garch_forecast_check,which="all")
+
+
+
+#forecast beyond time horizon
+#best_ugfit_f <- ugarchfit(spec=model_ugarch, data = data_GARCH$Abflussmenge_f_ts_fd)
+#save(best_ugfit_f, file = "best_ugfit_f.rda")
+#load("best_ugfit_f.rda")
+garch_forecast <- ugarchforecast(best_ugfit_f, data = bitcoin, n.ahead = 8640, n.roll =0, out.sample = 0)
+save(garch_forecast, file = "best_ugfit_f.rda")
+load("best_ugfit_f.rda")
+
+
+#sigma (the conditional standard deviation) 
+plot(x=c(1:8640),y= sigma(garch_forecast))
+
+plot(x= data$Zeitstempel[-1],y=data_GARCH$Abflussmenge_f_ts_fd,type="l")
+plot(x=c(1:8640),y= fitted(garch_forecast))
+
+#necessary?
 hist(data_GARCH$Abflussmenge_f_ts_fd, 
 	100, 
 	prob = TRUE,
@@ -478,11 +510,33 @@ fits %>% select(stepwise) %>% report()
 fits %>% select(search) %>% report()
 # they all end up with the same coefficient estimates 
 
+fits %>% forecast(h=80) %>% autoplot(data)
 fits %>% 
   select(arima) %>%
   gg_tsresiduals()
+
 ```
 
+#arima blindfit mit forecast für die nächsten 16000 einheiten
+```{r}
+
+
+Forecast_arima_blindFit <- data %>% model(ARIMA(Abflussmenge))%>% report()
+
+#ist das trash?
+ Forecast_arima_blindFit %>% forecast(h=20000) %>% autoplot(data)
+ Forecast_arima_blindFit %>% forecast(h=8000) %>% autoplot(data)
+ Forecast_arima_blindFit %>% forecast(h=1000) %>% autoplot(data)
+ 
+#sau geil
+r <- Forecast_arima_blindFit %>% generate(h=16000, times = 4)
+b <- Forecast_arima_blindFit %>% generate(h=16000)
+r%>% autoplot(.sim) + autolayer(data,Abflussmenge)
+b%>% autoplot(.sim) + autolayer(data,Abflussmenge)
+
+forecast_arima_values <- b[,c(2,4)]
+colnames(forecast_arima_values) <- c("Zeitstempel", "Abflussmenge")
+```
 
 
 
@@ -588,7 +642,9 @@ works fairly accurate — relative error 1%
 
 #turning forecast into flow velocity
 ```{r}
-forecasted_flowRate <- data[,c(1:2)]
+# forecasted_flowRate <- data[,c(1:2)]
+forecasted_flowRate <- forecast_arima_values
+
 
 #average of 101 m^3/s is introduced to the old Rhine
 forecasted_flowRate$Abflussmenge <- forecasted_flowRate$Abflussmenge - 101
@@ -608,21 +664,64 @@ ggplot(flow_velocity)+
 
 
 #enter travel distance in m
-traveldistance <- 70000
+traveldistance <- 170000
 
 #shipspeed in m/s (eigenantrieb)
 shipspeed <- 3.33
 
+#are you travelling with (downstream) or against (upstream) the stream?
+downstream <- TRUE
+
 #earliest departure date
-eDepDate <- as.POSIXct("2021-01-01 07:00", format= "%Y-%m-%d %H:%M")
+eDepDate <- as.POSIXct("2022-01-01 07:00", format= "%Y-%m-%d %H:%M")
   
 #latest arrival date
-lArrDate <- as.POSIXct("2021-01-20 15:00", format= "%Y-%m-%d %H:%M")
+lArrDate <- as.POSIXct("2022-01-17 15:00", format= "%Y-%m-%d %H:%M")
 
 #since 5 min difference between measurements calc travelled distance with current value for now and next 4 mins
+if(downstream==TRUE){
 flow_velocity$Fliessgeschwindigkeit <- (flow_velocity$Fliessgeschwindigkeit+shipspeed)*5*60
+} else{
+  flow_velocity$Fliessgeschwindigkeit <- (flow_velocity$Fliessgeschwindigkeit-shipspeed)*5*60
+}
+
+ggplot(flow_velocity)+
+  geom_line(aes(x=Zeitstempel,y=Fliessgeschwindigkeit))
 
 
+summary <- data.frame(DepartureTime =as.POSIXct(character(), format= "%Y-%m-%d %H:%M"),
+                      Duration= integer(),
+                      ArrivalTime = as.POSIXct(character(), format= "%Y-%m-%d %H:%M"))
+
+timeframe <- seq(eDepDate, lArrDate,by = "5 min")
+for (depTime in timeframe) {
+  ####depTime <- eDepDate
+  start<- match(depTime,flow_velocity$Zeitstempel)
+  i<- start
+  
+  repeat{
+    if(i>length(flow_velocity$Fliessgeschwindigkeit)){
+      break
+    }
+    
+  distance_travelled <- sum(flow_velocity$Fliessgeschwindigkeit[start:i])
+  i <- i + 1 
+  if(distance_travelled >= traveldistance){
+    summary %<>% add_row(DepartureTime = flow_velocity$Zeitstempel[start]
+                        ,Duration= ((i-start)*5),
+                        ArrivalTime =flow_velocity$Zeitstempel[i])
+    break
+    }
+  }
+}
+
+ggplot(summary, aes(x=Duration, y = ..prop..))+
+  geom_bar()
+
+ggplot(summary, aes(x= DepartureTime ,y=Duration))+
+  geom_line()
+
+optimal_departure_times <- as.data.frame(summary) %>% dplyr::filter(Duration == min(Duration))
 
 ```
 
