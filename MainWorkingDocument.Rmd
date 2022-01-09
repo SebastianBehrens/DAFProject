@@ -10,11 +10,16 @@ editor_options:
 # install.packages("tidyverse")
 # install.packages("fpp3")
 # install.packages("imputeTS")
+#install.packages("fGarch")
+#install.packages("fitdistrplus")
+
 rm(list = ls())
 library(tidyverse)
 library(fpp3)
 library(magrittr)
 library(imputeTS)
+library(fGarch)
+library(fitdistrplus)
 data <- read_delim("BaselMessungen.csv", delim = ";")
 data %<>% select(-c("Wasserstand","Pegel")) %>% as_tsibble()
 ```
@@ -360,6 +365,7 @@ However, there are two issues: a) there persist strong autocorrelations, b) the 
 ## Checking Error Term (Heteroscedasticity) (again, should only be done after differencing)
 
 ```{r}
+#checking stl decomp (not our decomp. Therefore we should delete this.)
 #is heteroscedastic
 remainder <- decomposition_stl$remainder 
 acf(remainder)
@@ -369,6 +375,85 @@ acf(remainder)
 
 ## Fitting a GARCH model
 ```{r}
+View(data)
+#since differencing resulst in a NA in the first row we need to remove it
+data_GARCH <- data %>% filter(!is.na(Abflussmenge_f_ts_fd))
+plot(acf(data_GARCH$Abflussmenge_f_ts_fd^2, type = "correlation", lag.max = 100)[1:100])
+plot(acf(data_GARCH$Abflussmenge_f_ts_fd^2, type = "correlation", lag.max = 1000)[1:1000])
+acf(abs(data_GARCH$Abflussmenge_f_ts_fd), type = "correlation", lag.max = 100)
+acf(abs(data_GARCH$Abflussmenge_f_ts_fd), type = "correlation", lag.max = 1000)
+#hyperbolic decay can be seen in the remainder therefore => heteroscedastic
+
+# code runs super long calculates AIC and BIC for different GARCH and ARCH Models:
+
+#starting with normal distribution
+condDist <- "norm"
+#  condDist <- "std"
+
+# ARCH- Model (no dependance on past variance)(we can kick this out right?)
+#alpha_max <- 7
+#m <- matrix(0, ncol = 2,nrow = alpha_max)
+#N <- length(data_GARCH$Abflussmenge_f_ts_fd)
+#for (alpha in c(1:alpha_max)){
+#  gfit <- NULL
+#  f <- as.formula(sprintf("~ garch(%d, 0)",alpha))
+#  gfit  <- garchFit(formula = f, data=data_GARCH$Abflussmenge_f_ts_fd, cond.dist=condDist)
+#  m[alpha,1] <- (2*(alpha+2)      +  2*gfit@fit$value)/N #aic
+#  m[alpha,2] <- (log(N)*(alpha+2) +  2*gfit@fit$value)/N #bic
+#}
+# save(m, file = "IC_table_ARCH.rda")
+ load("IC_table_ARCH.rda")
+m
+max(m[,1])
+max(m[,2])
+#best arch is alpha = 1
+
+#Garch-Model
+#alpha_max <- 7
+#beta_max <- 7
+#m_garch <- array(0, dim=c(alpha_max,beta_max,2))
+#N <- length(data_GARCH$Abflussmenge_f_ts_fd)
+#for (alpha in c(1:alpha_max)){
+#  for (beta in c(1:beta_max)) {
+#      gfit <- NULL
+#     f <- as.formula(sprintf("~ garch(%d, %d)",alpha, beta))
+#      gfit  <- garchFit(formula = f, data=data_GARCH$Abflussmenge_f_ts_fd, cond.dist=condDist)
+#      m_garch[alpha,beta,1] <- (2*(alpha+beta+2)      +  2*gfit@fit$value)/N #aic
+#      m_garch[alpha,beta,2] <- (log(N)*(alpha+beta+2) +  2*gfit@fit$value)/N #bic
+#  }
+#
+#}
+#
+#save(m_garch, file = "IC_table_GARCH.rda")
+load("IC_table_GARCH.rda")
+m_garch
+max(m_garch[,,1])
+max(m_garch[,,2])
+
+#best GARCH-Model is alpha= 1, beta = 5:
+best_gfit  <- garchFit(formula = ~ garch(1,5), data=data_GARCH$Abflussmenge_f_ts_fd, cond.dist=condDist)
+forecast_GARCH <- predict(n.ahead= 8640,best_gfit)
+
+
+hist(data_GARCH$Abflussmenge_f_ts_fd, 
+	100, 
+	prob = TRUE,
+	col="gray", main = "Histogram")
+
+lines( sort(data_GARCH$Abflussmenge_f_ts_fd), 
+       dnorm(sort(data_GARCH$Abflussmenge_f_ts_fd), 
+             mean = mean(data_GARCH$Abflussmenge_f_ts_fd), 
+	            sd = sqrt(var(data_GARCH$Abflussmenge_f_ts_fd))),
+	lwd = 2
+	)
+
+qqnorm(data_GARCH$Abflussmenge_f_ts_fd)
+qqline(data_GARCH$Abflussmenge_f_ts_fd)
+
+#find good distribution?
+descdist(data_GARCH$Abflussmenge_f_ts_fd, discrete = FALSE, method="sample")
+descdist(decomposition_stl$remainder, discrete = FALSE, method="sample")
+#distributions won´t fit well
 
 ```
 
@@ -501,5 +586,44 @@ my_autocorr(y_stationary, 7) %>% arrange(counter)  %>% pull(autocorr)
 ```
 works fairly accurate — relative error 1%
 
+#turning forecast into flow velocity
+```{r}
+forecasted_flowRate <- data[,c(1:2)]
+
+#average of 101 m^3/s is introduced to the old Rhine
+forecasted_flowRate$Abflussmenge <- forecasted_flowRate$Abflussmenge - 101
+
+#capacity of the Rheinseitenkanal is limited to 1400m^3/s
+forecasted_flowRate$Abflussmenge <- ifelse(forecasted_flowRate$Abflussmenge >1400,1400,forecasted_flowRate$Abflussmenge)
+
+ggplot(forecasted_flowRate)+
+  geom_line(aes(x=Zeitstempel,y=Abflussmenge))
+
+#convert flow rate to flow velocity in m/s
+flow_velocity <- forecasted_flowRate %>% mutate(Fliessgeschwindigkeit = Abflussmenge/630)
+flow_velocity <- flow_velocity[,c(1,3)]
+ggplot(flow_velocity)+
+  geom_line(aes(x=Zeitstempel,y=Fliessgeschwindigkeit))
+
+
+
+#enter travel distance in m
+traveldistance <- 70000
+
+#shipspeed in m/s (eigenantrieb)
+shipspeed <- 3.33
+
+#earliest departure date
+eDepDate <- as.POSIXct("2021-01-01 07:00", format= "%Y-%m-%d %H:%M")
+  
+#latest arrival date
+lArrDate <- as.POSIXct("2021-01-20 15:00", format= "%Y-%m-%d %H:%M")
+
+#since 5 min difference between measurements calc travelled distance with current value for now and next 4 mins
+flow_velocity$Fliessgeschwindigkeit <- (flow_velocity$Fliessgeschwindigkeit+shipspeed)*5*60
+
+
+
+```
 
 
