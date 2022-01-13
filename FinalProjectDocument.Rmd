@@ -1,6 +1,6 @@
 ---
-author: "Behrens, Sebastian; Valentinelli, Denis; Velez-Klumpp, Sofia"
-title: "Problem Set 1"
+author: "Behrens, Sebastian; Sewing, Felix"
+title: "Behrens_Sewing_HS21_final"
 output:
   pdf_document: 
     extra_dependencies: subfig
@@ -30,4 +30,412 @@ Steps to complete:
 - model the ts
 - make operationalizable
   - enter distance, arrival date at latest => find optimal time window
-- make app  
+
+
+# Loading Packages and Data
+```{r}
+#install.packages("tidyverse")
+#install.packages("dplyr")
+# install.packages("fpp3")
+# install.packages("magrittr")
+# install.packages("imputeTS")
+
+
+rm(list = ls())
+library(tidyverse)
+library(fpp3)
+library(dplyr)
+library(magrittr)
+library(imputeTS)
+
+
+data <- read_delim("BaselMessungen.csv", delim = ";")
+data %<>% dplyr::select(-c("Wasserstand","Pegel")) %>% as_tsibble()
+```
+
+# First EDA
+```{r}
+# setting a nice plotting theme as default
+theme_set(
+    theme_classic() + 
+        theme(
+            axis.ticks.length = unit(-0.25, "cm"),
+            axis.text.x = element_text(margin = unit(c(0.4,0,0,0), "cm")),
+            axis.text.y = element_text(margin = unit(c(0,0.4,0,0), "cm")),
+            axis.line = element_blank(),
+            panel.grid.major.y = element_line(linetype = 2),
+            plot.title = element_text(hjust = 0.5),
+            text = element_text(family = "serif"),
+            legend.justification = c("right", "top"),
+            # legend.position = c(1, 1),
+            legend.position = c(.98, .98),
+            legend.background = element_rect(fill = NA, color = "black"),
+            panel.border = element_rect(fill = NA, size = 1.25),
+            strip.text = element_text(size = 12)
+            # legend.margin = margin(6, 10, 6, 6)
+            # legend.box.background = element_rect(colour = "black")
+
+                        )
+    
+    )
+
+```
+## First Inspectional Plot
+```{r}
+# Abb. 1
+ggplot(data)+
+  geom_line(aes(x=Zeitstempel,y=Abflussmenge)) 
+```
+
+## Summary Statistics
+```{r}
+dim(data)
+interval_pull(data$Zeitstempel)
+summary(data)
+```
+
+## Identifying Missing Values
+```{r}
+count_gaps(data)
+
+sum(is.na(data$Abflussmenge))
+sum(is.na(data$Abflussmenge))/length(data$Zeitstempel)
+
+# checking time consistency of measurements
+check1 <- data %>% as_tibble() %>% drop_na() %>%
+  arrange(Zeitstempel) %>%
+  mutate(diff = lag(Zeitstempel) - Zeitstempel, diff = as.factor(diff)) %>%
+  group_by(diff) %>%
+  summarise(counter = n())
+check1
+```
+
+## Visualising Missing Values
+```{r}
+# augmenting all time slots with missing data
+data %<>% fill_gaps(.full = TRUE)
+
+
+# missing_data_plot
+missing_datapoints <- data %>%
+  dplyr::filter(is.na(Abflussmenge)) %>% pull(Zeitstempel)
+
+data %>% ggplot(aes(Zeitstempel, Abflussmenge)) + geom_line() + geom_vline(xintercept = missing_datapoints, col = "grey") #Abb. 2
+```
+
+## More Sophisticated Inspectional Plot (comment für anderen plot; data im falschen zustand für den komment; to be moved)
+```{r}
+data %>% gg_tsdisplay(Abflussmenge, plot_type='partial') # Abb. 3
+```
+Notes:
+- indicates high positive correlation with recent past (1-2 days)
+- indicates medium to low negative correlation with little less recent past (7-9 days)
+- indicates low positive correlation with distant past (33 days)
+
+
+## Impute Missing Values
+```{r, warning = FALSE}
+
+ggplot_na_gapsize(data)
+
+#impute missing values with the kalman method
+data_imputed <- na_kalman(data)
+
+aux <- data %>%
+  as_tibble() %>%
+  mutate(origin = "unimputed", missing = ifelse(is.na(Abflussmenge), 1, 0)) %>%
+  full_join(data_imputed %>% as_tibble(), by = "Zeitstempel")
+
+#visualize imputations
+aux %>% dplyr::filter(missing == 1)
+aux_dot_size <- 0.1
+data %>% ggplot(aes(Zeitstempel, Abflussmenge)) + geom_point(size = aux_dot_size, color = "grey") + geom_point(data = aux %>% dplyr::filter(missing == 1), aes(Zeitstempel, Abflussmenge.y), col = "black", size = aux_dot_size) #Abb.4
+
+data <- data_imputed
+```
+
+# Decomposition
+## Decomposition with `stats::decompose()`
+```{r}
+frequency(data)
+decomposition_simple <- as.ts(data, frequency = 288) %>% decompose()
+autoplot(decomposition_simple) #Abb. 5
+```
+
+Remark: We suspect the extreme measurement closely after 2300 is due to error. There are ca. 20 missing values closely before five measurements at around 1600 after which the time series continues at around value 800. We suspect that to be a measurement error.
+
+
+## Decomposition with STL (LOESS)
+Since ``stats::decompose()` decomposes into a trend and a single seasonal component only we will now try a different more fine-grained decomposition into multiple seasonal components. While doing so we also forego a central but also limiting assumption of the previous decomposition, being that the seasonality must be consistent (i.e. not varying) with time. In other words, a singel seasonality pattern is assumed to fit the whole time series, disregarding more fine-grained seasonalities, that aggregate to a seasonality with component with differing patterns over time.
+```{r}
+# decomposition using default values of the STL function
+decomposition_stl <- data %>%
+  model(stl = STL(Abflussmenge)) %>%
+  components() 
+autoplot(decomposition_stl) #Abb. 6
+```
+
+## Comparing the Decompositions by Trend (Visually)
+```{r}
+data %>% ggplot(aes(Zeitstempel, Abflussmenge)) +
+  geom_line(colour = "grey") +
+  geom_line(aes(y = decomposition_stl$trend), colour = "red") +
+  geom_line(aes(y = decomposition_simple$trend), colour = "blue") +
+  labs(
+    y = "flow rate",
+    x = "time",
+    title = "Flow Rate of the Rhine in Basel") #missing (legend missing) #Abb. 7
+```
+
+## Comparing the Decompositions by Trend (Numerically)
+```{r}
+decomposition_comparison <- tibble(remainder_posttrend_stl = 
+                data$Abflussmenge-decomposition_stl$trend, 
+              remainder_posttrend_simple =
+                data$Abflussmenge-decomposition_simple$trend
+              )
+decomposition_comparison %>% summarise(
+  remainder_posttrend_stl_mean = mean(remainder_posttrend_stl, na.rm = T),
+  remainder_posttrend_simple_mean = mean(remainder_posttrend_simple, na.rm = T)
+)
+
+```
+## Conclusion on the Comparison
+One can see that filtering the time series for the stl-trend leaves a smaller less varyying time series. That can be interpreted as the stl-trend captures more than the simple-trend. On the flip-side, this comparatively worse-fitting stl-trend can be deemed less overfitting, which is alsoindicated by various erratic movements in the trend. We will thus, continue with the trend estimated by stl.
+
+# Modelling
+## Filtering for Trend
+```{r}
+data %<>% 
+  mutate(Abflussmenge_f_t = Abflussmenge - decomposition_stl$trend)
+
+data
+```
+### Inspecting the Filtered TS
+```{r}
+data %>%
+  gg_tsdisplay(Abflussmenge_f_t, plot_type='partial') #Abb. 8
+```
+
+As visible by the plot (figure 8), the time series is not yet covariance stationary, a requirement for further application fo ARMA and ARIMA modelling, as the variance of the time series varies heavily throughout the time span of the time series.
+We will therefore continue to filter out additional seasonality components estimated with the Loess method.
+
+## Filtering for Seasonalities
+```{r}
+data %<>% 
+  mutate(
+    Abflussmenge_f_ts = Abflussmenge_f_t - decomposition_stl$season_hour - decomposition_stl$season_day - decomposition_stl$season_week)
+```
+### Inspecting the Filtered TS
+```{r}
+data %>%
+  gg_tsdisplay(Abflussmenge_f_ts, plot_type='partial') #Abb. 9
+```
+The time series looses a bit of variance, especially at the highly varying time sections. We will therefore, now take first differences to make the time series more stationary and reduce the extent of varying variance.
+
+### Differentiating the time series
+```{r}
+data %<>% dplyr::mutate(Abflussmenge_f_ts_fd = Abflussmenge_f_ts - lag(Abflussmenge_f_ts)) 
+data %>% 
+  gg_tsdisplay(Abflussmenge_f_ts_fd, plot_type = "partial") #Abb. 10
+```
+This results in a time series not fully covariance stationary, as variance does increase strongly at time.
+Additionally, auto-correlation is rather widely spread for a given time difference as visible in the next plot:
+```{r}
+lag.plot(ts(data$Abflussmenge_f_ts_fd[-1]), lags = 4, ) #Abb. 11
+```
+For the first few lagged plots of the time series (filtered for trend and seasonality as well as first differences taken) auto-correlation appears to be centered around zero, even if not always exactly zero (necessary for covariance stationarity). This hints to further patterns to be extractable, as it is also shown in strong (partial) auto-correlations:
+```{r}
+# pacf <- pacf(data$Abflussmenge_f_ts_fd[-1], lag.max = 100000, plot = F)
+# save(pacf, file = "pacf100000_f_ts_fd.rda")
+load("pacf100000_f_ts_fd.rda")
+pacf_data <- tibble(
+  lag = c(0:(length(pacf$acf)-1)),
+  autocorr = pacf$acf,
+  ) %>% 
+  filter(lag!=0) %>% 
+  mutate(autocorr = as.double(autocorr))
+pacf_data %>% arrange(desc(abs(autocorr))) %>% filter(autocorr>0.09)
+```
+One can now observe 14 comparatively high and significant partial autocorrelations above 0.09 which allows for further pattern extraction.
+
+```{r}
+# Remark: takes long time to run
+# commented out because takes long time to run. load("fits.rda") gets the object.
+# fits <- data %>%
+#   model(
+#     arima = ARIMA(Abflussmenge ~ pdq(1:5, 1:5, 1:5)),
+#     stepwise = ARIMA(Abflussmenge, ic = "aicc"), # searches on its own here (stepwise)
+#     search = ARIMA(Abflussmenge, ic = "aicc", stepwise=FALSE)
+#     )
+# save(fits, file = "fits.rda")
+
+load("fits.rda")
+fits_backup <- fits
+
+fits %>% select(stepwise) %>% report()
+
+fits %>% 
+  select(stepwise) %>%
+  gg_tsresiduals()
+
+# partial auto correlation after filtering for filtering for arima ---------------------------------
+fits %>% select(stepwise) %>% report()
+
+#pacf <- pacf(data$Abflussmenge_f_ts_fd[-1], lag.max = 100000, plot = F)
+# save(pacf, file = "pacf100000_f_ts_fd.rda")
+load("pacf100000_f_ts_fd.rda")
+pacf_data <- tibble(
+  lag = c(0:(length(pacf$acf)-1)),
+  autocorr = pacf$acf,
+  ) %>% 
+  filter(lag!=0) %>% 
+  mutate(autocorr = as.double(autocorr))
+pacf_data %>% arrange(desc(abs(autocorr))) %>% filter(autocorr>0.09)
+
+```
+The arima fit that is found via a stepwise search (#unfinished explain more how this solution is found to show we understand it), yields very significant parameter estimates. (#idea one could visualise the estimates with confidence interval (error bars) and give interpretations to the estimates (the estimated arima model))
+However, there are two issues: a) there persist strong autocorrelations, b) the error is (as previously hinted to) heteroscedastic.
+
+## Testing residual after differntiation for heteroscedacity
+```{r}
+plot(acf(data$Abflussmenge_f_ts^2, type = "correlation", lag.max = 100)[1:100])
+data_h_test <- data %>% filter(!is.na(Abflussmenge_f_ts_fd))
+plot(acf(data_h_test$Abflussmenge_f_ts_fd^2, type = "correlation", lag.max = 100)[1:100])
+```
+
+
+## Blind fitting on TS itself
+```{r}
+# Remark: takes long time to run
+# commented out because takes long time to run. load("fits.rda") gets the object.
+# fits <- data %>%
+#   model(
+#     arima = ARIMA(Abflussmenge ~ pdq(1:5, 1:5, 1:5)),
+#     stepwise = ARIMA(Abflussmenge, ic = "aicc"), # searches on its own here (stepwise)
+#     search = ARIMA(Abflussmenge, ic = "aicc", stepwise=FALSE)
+#     )
+# save(fits, file = "fits.rda")
+
+load("fits.rda")
+fits_backup <- fits
+
+fits %>% glance(fits) %>% arrange(desc(BIC))
+fits %>% select(stepwise) %>% report()
+
+# they all end up with the same coefficient estimates 
+fits %>% forecast(h=80) %>% autoplot(data)
+fits %>% 
+  select(stepwise) %>%
+  gg_tsresiduals()
+#brauchen das für den unteren blind fit
+
+```
+
+#arima blindfit mit forecast für die nächsten 16000 einheiten
+```{r}
+
+
+Forecast_arima_blindFit <- data %>% model(ARIMA(Abflussmenge))%>% report()
+
+Forecast_arima_blindFit  %>% report()
+Forecast_arima_blindFit %>% forecast(h=8800) %>% autoplot(data)
+
+
+#generate forecast for next 8800*5min = 44'000min = 30.5 days
+b <- Forecast_arima_blindFit %>% generate(h=8800)
+b%>% autoplot(.sim) + autolayer(data,Abflussmenge)
+
+forecast_arima_values <- b[,c(2,4)]
+colnames(forecast_arima_values) <- c("Zeitstempel", "Abflussmenge")
+```
+
+
+#turning forecast into flow velocity and predicting optimal departure times
+```{r}
+
+forecasted_flowRate <- forecast_arima_values
+
+#average of 101 m^3/s is introduced to the old Rhine
+forecasted_flowRate$Abflussmenge <- forecasted_flowRate$Abflussmenge - 101
+
+#capacity of the Rheinseitenkanal is limited to 1400m^3/s
+forecasted_flowRate$Abflussmenge <- ifelse(forecasted_flowRate$Abflussmenge >1400,1400,forecasted_flowRate$Abflussmenge)
+
+ggplot(forecasted_flowRate)+
+  geom_line(aes(x=Zeitstempel,y=Abflussmenge))
+
+#convert flow rate to flow velocity in m/s
+flow_velocity <- forecasted_flowRate %>% mutate(Fliessgeschwindigkeit = Abflussmenge/630)
+flow_velocity <- flow_velocity[,c(1,3)]
+ggplot(flow_velocity)+
+  geom_line(aes(x=Zeitstempel,y=Fliessgeschwindigkeit))
+
+
+###################################################################################
+#enter travel distance in m
+traveldistance <- 170000
+
+#shipspeed in m/s (eigenantrieb)
+shipspeed <- 3.33
+
+#are you travelling with (downstream) or against (upstream) the stream?
+downstream <- TRUE
+
+#enter earliest departure date (must be in forecast range)
+eDepDate <- as.POSIXct("2021-12-01 07:00", format= "%Y-%m-%d %H:%M")
+  
+#enter latest arrival date (must be in forecast range)
+lArrDate <- as.POSIXct("2021-12-20 15:00", format= "%Y-%m-%d %H:%M")
+
+###################################################################################
+
+
+#since 5 min difference between measurements calc travelled distance with current value for now and next 4 mins
+if(downstream==TRUE){
+flow_velocity$Fliessgeschwindigkeit <- (flow_velocity$Fliessgeschwindigkeit+shipspeed)*5*60
+} else{
+  flow_velocity$Fliessgeschwindigkeit <- (flow_velocity$Fliessgeschwindigkeit-shipspeed)*5*60
+}
+
+ggplot(flow_velocity)+
+  geom_line(aes(x=Zeitstempel,y=Fliessgeschwindigkeit))+
+  labs(x="Time",y="Travelled distance in m per 5 minutes")
+
+
+summary <- data.frame(DepartureTime =as.POSIXct(character(), format= "%Y-%m-%d %H:%M"),
+                      Duration= integer(),
+                      ArrivalTime = as.POSIXct(character(), format= "%Y-%m-%d %H:%M"))
+
+timeframe <- seq(eDepDate, lArrDate,by = "5 min")
+for (depTime in timeframe) {
+  ####depTime <- eDepDate
+  start<- match(depTime,flow_velocity$Zeitstempel)
+  i<- start
+  
+  repeat{
+    if(i>length(flow_velocity$Fliessgeschwindigkeit)){
+      break
+    }
+    
+  distance_travelled <- sum(flow_velocity$Fliessgeschwindigkeit[start:i])
+  i <- i + 1 
+  if(distance_travelled >= traveldistance){
+    summary %<>% add_row(DepartureTime = flow_velocity$Zeitstempel[start]
+                        ,Duration= ((i-start)*5),
+                        ArrivalTime =flow_velocity$Zeitstempel[i])
+    break
+    }
+  }
+}
+
+ggplot(summary, aes(x=Duration, y = ..prop..))+
+  geom_bar()
+
+ggplot(summary, aes(x= DepartureTime ,y=Duration))+
+  geom_line()
+
+optimal_departure_times <- as.data.frame(summary) %>% dplyr::filter(Duration == min(Duration))
+
+```
+ 

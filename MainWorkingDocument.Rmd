@@ -110,14 +110,14 @@ data %<>% fill_gaps(.full = TRUE) # alternative
 # missing_data_plot
 
 missing_datapoints <- data %>%
-  filter(is.na(Abflussmenge)) %>% pull(Zeitstempel)
+  dplyr::filter(is.na(Abflussmenge)) %>% pull(Zeitstempel)
 
-data %>% ggplot(aes(Zeitstempel, Abflussmenge)) + geom_line() + geom_vline(xintercept = missing_datapoints, col = "grey")
+data %>% ggplot(aes(Zeitstempel, Abflussmenge)) + geom_line() + geom_vline(xintercept = missing_datapoints, col = "grey") # Abb. 2
 ```
 
 ## More Sophisticated Inspectional Plot (comment für anderen plot; data im falschen zustand für den komment; to be moved)
 ```{r}
-data %>% gg_tsdisplay(Abflussmenge, plot_type='partial')
+data %>% gg_tsdisplay(Abflussmenge, plot_type='partial') # Abb.3
 ```
 Notes:
 - indicates high positive correlation with recent past (1-2 days)
