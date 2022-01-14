@@ -262,19 +262,19 @@ pacf_data %>% arrange(desc(abs(autocorr))) %>% filter(autocorr>0.09)
 ```
 One can now observe 14 comparatively high and significant partial autocorrelations above 0.09 which allows for further pattern extraction.
 
+## Fitting ARIMA Class Models
 ```{r}
 # Remark: takes long time to run
 # commented out because takes long time to run. load("fits.rda") gets the object.
-fits <- data %>%
-  model(
-    # arima = ARIMA(Abflussmenge_f_ts_fd ~ pdq(1:5, 1:5, 1:5)),
-    stepwise = ARIMA(Abflussmenge_f_ts_fd, ic = "aicc"), # searches on its own here (stepwise)
+# fits <- data %>%
+#   model(
+#     arima = ARIMA(Abflussmenge_f_ts_fd ~ pdq(1:5, 1:5, 1:5)),
+#     stepwise = ARIMA(Abflussmenge_f_ts_fd, ic = "aicc"), # searches on its own here (stepwise)
 #     search = ARIMA(Abflussmenge_f_ts_fd, ic = "aicc", stepwise=FALSE)
-    )
-save(fits, file = "ARIMA_CLASS_Models_Abflussmenge_f_ts_fd.rda")
+#     )
+# save(fits, file = "ARIMA_CLASS_Models_Abflussmenge_f_ts_fd.rda")
 
-load("fits.rda")
-fits_backup <- fits
+load("ARIMA_CLASS_Models_Abflussmenge_f_ts_fd.rda")
 
 fits %>% select(stepwise) %>% report()
 
@@ -300,6 +300,14 @@ stepwise_fit <- fits %>% select(stepwise)
 ```
 The arima fit that is found via a stepwise search (#unfinished explain more how this solution is found to show we understand it), yields very significant parameter estimates. (#idea one could visualise the estimates with confidence interval (error bars) and give interpretations to the estimates (the estimated arima model))
 However, there are two issues: a) there persist strong autocorrelations, b) the error is (as previously hinted to) heteroscedastic.
+
+
+## Fitting GARCH Class Models
+
+```{r}
+
+```
+
 
 ## Looking for Heteroscedasticity
 (Testing residual after differntiation for heteroscedacity)
@@ -492,29 +500,66 @@ min(m[,2])
 #best arch is alpha = 7
 
 #Garch-Model
-#alpha_max <- 7
-#beta_max <- 7
-#m_garch <- array(0, dim=c(alpha_max,beta_max,2))
-#N <- length(data_GARCH$Abflussmenge_f_ts_fd)
-#for (alpha in c(1:alpha_max)){
-#  for (beta in c(1:beta_max)) {
-#      gfit <- NULL
-#     f <- as.formula(sprintf("~ garch(%d, %d)",alpha, beta))
-#      gfit  <- garchFit(formula = f, data=data_GARCH$Abflussmenge_f_ts_fd, cond.dist=condDist)
-#      m_garch[alpha,beta,1] <- (2*(alpha+beta+2)      +  2*gfit@fit$value)/N #aic
-#      m_garch[alpha,beta,2] <- (log(N)*(alpha+beta+2) +  2*gfit@fit$value)/N #bic
-#  }
-#
-#}
-#
-#save(m_garch, file = "IC_table_GARCH.rda")
-load("IC_table_GARCH.rda")
+alpha_max <- 20
+beta_max <- 20
+m_garch <- array(0, dim=c(alpha_max,beta_max,2))
+garch_comparison <- tibble(alpha = as.double(),
+                           beta = as.double(),
+                           aic = as.double(),
+                           bic = as.double()
+                           ) 
+N <- length(data$Abflussmenge_f_ts_fd)-1
+for (aux_alpha in c(1:alpha_max)){
+ for (aux_beta in c(1:beta_max)) {
+     gfit <- NULL
+     aux_formula <- as.formula(sprintf("~ garch(%d, %d)",aux_alpha, aux_beta))
+     aux_fit  <- fGarch::garchFit(formula = aux_formula , data=data$Abflussmenge_f_ts_fd[-1], cond.dist="norm")
+     aux_aic <- (2*(aux_alpha+aux_beta+2)      +  2*aux_fit@fit$value)/N #aic
+     aux_bic <- (log(N)*(aux_alpha+aux_beta+2) +  2*aux_fit@fit$value)/N #bic
+
+     garch_comparison %<>% complete(alpha = aux_alpha, beta = aux_beta, aic = aux_aic, bic = aux_bic)
+ }
+
+}
+
+save(garch_comparison, file = "garch_comparison.rda")
+load("garch_comparison.rda")
 m_garch
 min(m_garch[,,1])
 min(m_garch[,,2])
 
 #best GARCH-Model is alpha= 7, beta = 1:
-best_gfit  <- garchFit(formula = ~ garch(1,5), data=data_GARCH$Abflussmenge_f_ts_fd, cond.dist="norm")
+best_gfit  <- fGarch::garchFit(formula = ~ garch(1,1), data=data$Abflussmenge_f_ts_fd[-1], cond.dist="norm")
+
+# forecasten & residual rauslösen analysieren
+gfit_residuals <- fGarch::residuals(best_gfit)
+plot(c(1:length(gfit_residuals)), gfit_residuals, type = "l")
+
+
+acf(gfit_residuals)
+
+# fit another arima
+length(gfit_residuals)
+length(data$Zeitstempel)
+garchfit_residuals_arima_fit <- tibble(Zeitstempel = data$Zeitstempel[-1], garchfit_resid = gfit_residuals) %>%
+  as_tsibble() %>%
+  model(
+    arima = ARIMA(garchfit_resid, ic = "aicc")
+  )
+test <- garchfit_residuals_arima_fit %>% residuals() %>% select(-.model)
+
+test_decomposition_stl <- test %>%
+  model(stl = STL(.resid)) %>%
+  components() 
+test_decomposition_stl %>% autoplot()
+
+acf(test_decomposition_stl$remainder)
+
+
+
+
+
+
 forecast_GARCH <- predict(n.ahead= 8640,best_gfit)
 
 #using ugarch from now on
@@ -569,4 +614,10 @@ descdist(decomposition_stl$remainder, discrete = FALSE, method="sample")
 #distributions won´t fit well
 ```
  
- 
+# Predicting Time Series (putting things back together)
+
+
+
+
+
+
