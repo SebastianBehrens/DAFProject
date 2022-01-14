@@ -39,6 +39,9 @@ Steps to complete:
 # install.packages("fpp3")
 # install.packages("magrittr")
 # install.packages("imputeTS")
+#install.packages("fGarch")
+#install.packages("fitdistrplus")
+#install.packages("rugarch")
 
 
 rm(list = ls())
@@ -47,6 +50,7 @@ library(fpp3)
 library(dplyr)
 library(magrittr)
 library(imputeTS)
+
 
 
 data <- read_delim("BaselMessungen.csv", delim = ";")
@@ -300,9 +304,12 @@ However, there are two issues: a) there persist strong autocorrelations, b) the 
 ## Testing residual after differntiation for heteroscedacity
 ```{r}
 plot(acf(data$Abflussmenge_f_ts^2, type = "correlation", lag.max = 100)[1:100])
-data_h_test <- data %>% filter(!is.na(Abflussmenge_f_ts_fd))
+data_h_test <- data %>% dplyr::filter(!is.na(Abflussmenge_f_ts_fd))
 plot(acf(data_h_test$Abflussmenge_f_ts_fd^2, type = "correlation", lag.max = 100)[1:100])
-```
+ggplot(data)+
+  geom_line(aes(x= Zeitstempel, y= Abflussmenge_f_ts_fd))
+  
+  ```
 
 
 ## Blind fitting on TS itself
@@ -355,9 +362,9 @@ fit_tes12 <- decomposition_stl %>% select(-.model) %>% model(ARIMA(remainder))
 fit_tes12 %>% gg_tsresiduals()
 
 
-final_fit <- data %>% model(arima = ARIMA(Abflussmenge ~ pdq(2, 1, 3) + PDQ(1, 1, 1)))
-final_fit <- data %>% model(arima = ARIMA(Abflussmenge, stepwise = FALSE, greedy = FALSE,approximation = FALSE))
-save(final_fit, file = "final_fit.rda")
+#final_fit <- data %>% model(arima = ARIMA(Abflussmenge ~ pdq(2, 1, 3) + PDQ(1, 1, 1)))
+#final_fit <- data %>% model(arima = ARIMA(Abflussmenge, stepwise = FALSE, greedy = FALSE,approximation = FALSE))
+#save(final_fit, file = "final_fit.rda")
 final_fit %>% report()
 final_fit %>% gg_tsresiduals()
 ```
@@ -451,4 +458,107 @@ ggplot(summary, aes(x= DepartureTime ,y=Duration))+
 optimal_departure_times <- as.data.frame(summary) %>% dplyr::filter(Duration == min(Duration))
 
 ```
+ 
+# Appendix
+```{r}
+data_GARCH <- data_h_test
+# code runs super long calculates AIC and BIC for different GARCH and ARCH Models:
+
+
+# ARCH- Model (no dependance on past variance)(we can kick this out right?)
+#alpha_max <- 7
+#m <- matrix(0, ncol = 2,nrow = alpha_max)
+#N <- length(data_GARCH$Abflussmenge_f_ts_fd)
+#for (alpha in c(1:alpha_max)){
+#  gfit <- NULL
+#  f <- as.formula(sprintf("~ garch(%d, 0)",alpha))
+#  gfit  <- garchFit(formula = f, data=data_GARCH$Abflussmenge_f_ts_fd, cond.dist=condDist)
+#  m[alpha,1] <- (2*(alpha+2)      +  2*gfit@fit$value)/N #aic
+#  m[alpha,2] <- (log(N)*(alpha+2) +  2*gfit@fit$value)/N #bic
+#}
+# save(m, file = "IC_table_ARCH.rda")
+ load("IC_table_ARCH.rda")
+m
+min(m[,1])
+min(m[,2])
+#best arch is alpha = 7
+
+#Garch-Model
+#alpha_max <- 7
+#beta_max <- 7
+#m_garch <- array(0, dim=c(alpha_max,beta_max,2))
+#N <- length(data_GARCH$Abflussmenge_f_ts_fd)
+#for (alpha in c(1:alpha_max)){
+#  for (beta in c(1:beta_max)) {
+#      gfit <- NULL
+#     f <- as.formula(sprintf("~ garch(%d, %d)",alpha, beta))
+#      gfit  <- garchFit(formula = f, data=data_GARCH$Abflussmenge_f_ts_fd, cond.dist=condDist)
+#      m_garch[alpha,beta,1] <- (2*(alpha+beta+2)      +  2*gfit@fit$value)/N #aic
+#      m_garch[alpha,beta,2] <- (log(N)*(alpha+beta+2) +  2*gfit@fit$value)/N #bic
+#  }
+#
+#}
+#
+#save(m_garch, file = "IC_table_GARCH.rda")
+load("IC_table_GARCH.rda")
+m_garch
+min(m_garch[,,1])
+min(m_garch[,,2])
+
+#best GARCH-Model is alpha= 7, beta = 1:
+best_gfit  <- garchFit(formula = ~ garch(1,5), data=data_GARCH$Abflussmenge_f_ts_fd, cond.dist="norm")
+forecast_GARCH <- predict(n.ahead= 8640,best_gfit)
+
+#using ugarch from now on
+model_ugarch<-ugarchspec(variance.model = list(model = "sGARCH", garchOrder = c(1, 5)), 
+                  distribution.model = "norm")
+
+#with Rolling to compare performance
+#best_ugfit <- ugarchfit(spec=model_ugarch, data = data_GARCH$Abflussmenge_f_ts_fd, out.sample = 10000)
+#garch_forecast_check <- ugarchforecast(best_ugfit, data = bitcoin, n.ahead = 8640, n.roll =8640)
+#save(best_ugfit, file = "best_ugfit.rda")
+#save(garch_forecast_check, file = "garch_forecast_check.rda")
+load("best_ugfit.rda")
+load("garch_forecast_check 2.rda")
+plot(garch_forecast_check,which="all")
+
+
+
+#forecast beyond time horizon
+#best_ugfit_f <- ugarchfit(spec=model_ugarch, data = data_GARCH$Abflussmenge_f_ts_fd)
+#save(best_ugfit_f, file = "best_ugfit_f.rda")
+#load("best_ugfit_f.rda")
+garch_forecast <- ugarchforecast(best_ugfit_f, data = bitcoin, n.ahead = 8640, n.roll =0, out.sample = 0)
+save(garch_forecast, file = "best_ugfit_f.rda")
+load("best_ugfit_f.rda")
+
+
+#sigma (the conditional standard deviation) 
+plot(x=c(1:8640),y= sigma(garch_forecast))
+
+plot(x= data$Zeitstempel[-1],y=data_GARCH$Abflussmenge_f_ts_fd,type="l")
+plot(x=c(1:8640),y= fitted(garch_forecast))
+
+#necessary?
+hist(data_GARCH$Abflussmenge_f_ts_fd, 
+	100, 
+	prob = TRUE,
+	col="gray", main = "Histogram")
+
+lines( sort(data_GARCH$Abflussmenge_f_ts_fd), 
+       dnorm(sort(data_GARCH$Abflussmenge_f_ts_fd), 
+             mean = mean(data_GARCH$Abflussmenge_f_ts_fd), 
+	            sd = sqrt(var(data_GARCH$Abflussmenge_f_ts_fd))),
+	lwd = 2
+	)
+
+qqnorm(data_GARCH$Abflussmenge_f_ts_fd)
+qqline(data_GARCH$Abflussmenge_f_ts_fd)
+
+#find good distribution?
+descdist(data_GARCH$Abflussmenge_f_ts_fd, discrete = FALSE, method="sample")
+descdist(decomposition_stl$remainder, discrete = FALSE, method="sample")
+#distributions won´t fit well
+```
+ 
  
