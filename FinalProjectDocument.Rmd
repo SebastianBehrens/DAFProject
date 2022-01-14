@@ -52,9 +52,8 @@ library(magrittr)
 library(imputeTS)
 
 
-
 data <- read_delim("BaselMessungen.csv", delim = ";")
-data %<>% dplyr::select(-c("Wasserstand","Pegel")) %>% as_tsibble()
+data %<>% select(-c("Wasserstand","Pegel")) %>% as_tsibble()
 ```
 
 # First EDA
@@ -122,7 +121,7 @@ data %<>% fill_gaps(.full = TRUE)
 
 # missing_data_plot
 missing_datapoints <- data %>%
-  dplyr::filter(is.na(Abflussmenge)) %>% pull(Zeitstempel)
+  filter(is.na(Abflussmenge)) %>% pull(Zeitstempel)
 
 data %>% ggplot(aes(Zeitstempel, Abflussmenge)) + geom_line() + geom_vline(xintercept = missing_datapoints, col = "grey") #Abb. 2
 ```
@@ -151,9 +150,9 @@ aux <- data %>%
   full_join(data_imputed %>% as_tibble(), by = "Zeitstempel")
 
 #visualize imputations
-aux %>% dplyr::filter(missing == 1)
+aux %>% filter(missing == 1)
 aux_dot_size <- 0.1
-data %>% ggplot(aes(Zeitstempel, Abflussmenge)) + geom_point(size = aux_dot_size, color = "grey") + geom_point(data = aux %>% dplyr::filter(missing == 1), aes(Zeitstempel, Abflussmenge.y), col = "black", size = aux_dot_size) #Abb.4
+data %>% ggplot(aes(Zeitstempel, Abflussmenge)) + geom_point(size = aux_dot_size, color = "grey") + geom_point(data = aux %>% filter(missing == 1), aes(Zeitstempel, Abflussmenge.y), col = "black", size = aux_dot_size) #Abb.4
 
 data <- data_imputed
 ```
@@ -239,7 +238,7 @@ The time series looses a bit of variance, especially at the highly varying time 
 
 ### Differentiating the time series
 ```{r}
-data %<>% dplyr::mutate(Abflussmenge_f_ts_fd = Abflussmenge_f_ts - lag(Abflussmenge_f_ts)) 
+data %<>% mutate(Abflussmenge_f_ts_fd = Abflussmenge_f_ts - lag(Abflussmenge_f_ts)) 
 data %>% 
   gg_tsdisplay(Abflussmenge_f_ts_fd, plot_type = "partial") #Abb. 10
 ```
@@ -266,13 +265,13 @@ One can now observe 14 comparatively high and significant partial autocorrelatio
 ```{r}
 # Remark: takes long time to run
 # commented out because takes long time to run. load("fits.rda") gets the object.
-# fits <- data %>%
-#   model(
-#     arima = ARIMA(Abflussmenge ~ pdq(1:5, 1:5, 1:5)),
-#     stepwise = ARIMA(Abflussmenge, ic = "aicc"), # searches on its own here (stepwise)
-#     search = ARIMA(Abflussmenge, ic = "aicc", stepwise=FALSE)
-#     )
-# save(fits, file = "fits.rda")
+fits <- data %>%
+  model(
+    # arima = ARIMA(Abflussmenge_f_ts_fd ~ pdq(1:5, 1:5, 1:5)),
+    stepwise = ARIMA(Abflussmenge_f_ts_fd, ic = "aicc"), # searches on its own here (stepwise)
+#     search = ARIMA(Abflussmenge_f_ts_fd, ic = "aicc", stepwise=FALSE)
+    )
+save(fits, file = "ARIMA_CLASS_Models_Abflussmenge_f_ts_fd.rda")
 
 load("fits.rda")
 fits_backup <- fits
@@ -297,19 +296,28 @@ pacf_data <- tibble(
   mutate(autocorr = as.double(autocorr))
 pacf_data %>% arrange(desc(abs(autocorr))) %>% filter(autocorr>0.09)
 
+stepwise_fit <- fits %>% select(stepwise)
 ```
 The arima fit that is found via a stepwise search (#unfinished explain more how this solution is found to show we understand it), yields very significant parameter estimates. (#idea one could visualise the estimates with confidence interval (error bars) and give interpretations to the estimates (the estimated arima model))
 However, there are two issues: a) there persist strong autocorrelations, b) the error is (as previously hinted to) heteroscedastic.
 
-## Testing residual after differntiation for heteroscedacity
+## Looking for Heteroscedasticity
+(Testing residual after differntiation for heteroscedacity)
 ```{r}
-plot(acf(data$Abflussmenge_f_ts^2, type = "correlation", lag.max = 100)[1:100])
-data_h_test <- data %>% dplyr::filter(!is.na(Abflussmenge_f_ts_fd))
+stepwise_fit %>% augment() %>% ggplot(aes(.fitted, .resid)) + geom_point(size = 0.3)
+stepwise_fit %>% augment() %>% select(Zeitstempel:.fitted) %>% pivot_longer(-Zeitstempel) %>% ggplot(aes(Zeitstempel, value, col = name)) + geom_point(size = 0.3)
+```
+
+
+
+```{r}
+plot(acf(data$Abflussmenge_f_ts_fd[-1]^2, type = "correlation", lag.max = 100)[1:100])
+data_h_test <- data %>% filter(!is.na(Abflussmenge_f_ts_fd))
 plot(acf(data_h_test$Abflussmenge_f_ts_fd^2, type = "correlation", lag.max = 100)[1:100])
 ggplot(data)+
   geom_line(aes(x= Zeitstempel, y= Abflussmenge_f_ts_fd))
   
-  ```
+```
 
 
 ## Blind fitting on TS itself
@@ -322,9 +330,9 @@ ggplot(data)+
 #     stepwise = ARIMA(Abflussmenge, ic = "aicc"), # searches on its own here (stepwise)
  #    search = ARIMA(Abflussmenge, ic = "aicc", stepwise=FALSE)
 #     )
-# save(fits, file = "fits.rda")
+# save(fits, file = "BLIND_fit.rda")
 
-load("fits.rda")
+load("BLIND_fit.rda")
 fits_backup <- fits
 
 fits %>% glance(fits) %>% arrange(desc(BIC))
@@ -346,7 +354,7 @@ fitresid %>% gg_tsresiduals()
 
 #generate forecast for next 8800*5min = 44'000min = 30.5 days
 b <- fits %>% select(stepwise) %>% generate(h=8800)
-b%>% autoplot(.sim) + autolayer(data,Abflussmenge)
+b %>% autoplot(.sim) + autolayer(data,Abflussmenge)
 
 forecast_arima_values <- b[,c(2,4)]
 colnames(forecast_arima_values) <- c("Zeitstempel", "Abflussmenge")
@@ -455,7 +463,7 @@ ggplot(summary, aes(x=Duration, y = ..prop..))+
 ggplot(summary, aes(x= DepartureTime ,y=Duration))+
   geom_line()
 
-optimal_departure_times <- as.data.frame(summary) %>% dplyr::filter(Duration == min(Duration))
+optimal_departure_times <- as.data.frame(summary) %>% filter(Duration == min(Duration))
 
 ```
  
